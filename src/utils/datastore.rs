@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Transaction {
-    pub id: u64,
-    pub value: i64,
+    pub from: u64,
+    pub to: u64,
+    pub value: i64
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -73,8 +74,11 @@ impl DataStore {
     pub fn update_value(&mut self, id: u64, value: i64) {
         if let Some(v) = self.kv_store.get_mut(&id) {
             *v = value;
-            self.committed_transactions.push(Transaction { id, value });
         }
+    }
+
+    pub fn record_transaction(&mut self, from: u64, to: u64, value: i64) {
+        self.committed_transactions.push(Transaction { from, to, value });
     }
 
     pub fn print_value(&self, id: u64) {
