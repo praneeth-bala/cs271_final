@@ -3,24 +3,18 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc::Sender, Arc, Mutex};
 use std::thread;
-use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Message {
-    pub from: u64,
-    pub to: u64,
-    pub payload: Vec<u8>,
-}
+use super::event::{Event, NetworkEvent};
 
 pub struct Network {
     instance_connection_map: Arc<Mutex<HashMap<u64, TcpStream>>>,
-    sender: Sender<Message>,
+    sender: Sender<Event>,
     proxy: bool,
     instance_id: u64
 }
 
 impl Network {
-    pub fn new(instance_id: u64, sender: Sender<Message>, proxy: bool) -> Self {
+    pub fn new(instance_id: u64, sender: Sender<Event>, proxy: bool) -> Self {
         Self {
             instance_connection_map: Arc::new(Mutex::new(HashMap::new())),
             sender,
@@ -36,7 +30,7 @@ impl Network {
                 println!("Connected to proxy at {}", address);
 
                 // Create and send the "hello" message
-                let hello_message = Message {
+                let hello_message = NetworkEvent {
                     from: self.instance_id,
                     to: 0,
                     payload: Vec::new(),
@@ -84,7 +78,7 @@ impl Network {
                             let mut buffer = [0; 512];
                             if let Ok(bytes_read) = stream_clone.read(&mut buffer) {
                                 if bytes_read > 0 {
-                                    if let Ok(message) = serde_json::from_slice::<Message>(&buffer[..bytes_read]) {
+                                    if let Ok(message) = serde_json::from_slice::<NetworkEvent>(&buffer[..bytes_read]) {
                                         let instance_id = message.from;
                                         map_clone.lock().unwrap().insert(instance_id, stream_clone.try_clone().unwrap());
                                         println!("Instance {} connected", instance_id);
@@ -102,15 +96,20 @@ impl Network {
         });
     }
 
-    pub fn send_message(&mut self, message: Message) {
+    pub fn send_message(&mut self, message: NetworkEvent) {
         if message.to == self.instance_id {
             println!("Dropping message sent to myself");
             return;
         }
         let instance_id = if self.proxy { message.to } else { 0 };
         if let Some(stream) = self.instance_connection_map.lock().unwrap().get_mut(&instance_id) {
-            let serialized_message = serde_json::to_string(&message).unwrap();
-            if let Err(e) = stream.write_all(serialized_message.as_bytes()) {
+            let serialized_message = serde_json::to_vec(&message).unwrap();
+
+            // Add length prefix (4 bytes, big-endian)
+            let mut serialized_message_with_len = (serialized_message.len() as u32).to_be_bytes().to_vec();
+            serialized_message_with_len.extend_from_slice(&serialized_message);
+
+            if let Err(e) = stream.write_all(&serialized_message_with_len.as_slice()) {
                 println!("Failed to send message to {}: {}", message.to, e);
                 self.instance_connection_map.lock().unwrap().remove(&instance_id);
             } else {
@@ -122,19 +121,41 @@ impl Network {
     }
 }
 
-fn handle_connection(instance_id: u64, mut stream: TcpStream, sender: Sender<Message>, map: Arc<Mutex<HashMap<u64, TcpStream>>>) {
-    let mut buffer = [0; 512];
+fn handle_connection(instance_id: u64, mut stream: TcpStream, sender: Sender<Event>, map: Arc<Mutex<HashMap<u64, TcpStream>>>) {
+    let mut buffer = Vec::new();
+    let mut temp = [0; 1024]; // Temporary buffer for reads
     loop {
-        match stream.read(&mut buffer) {
+        match stream.read(&mut temp) {
             Ok(0) => {
                 println!("Connection closed by peer {}", instance_id);
                 map.lock().unwrap().remove(&instance_id);
                 break;
             }
             Ok(bytes_read) => {
-                if let Ok(message) = serde_json::from_slice::<Message>(&buffer[..bytes_read]) {
-                    println!("Received message from {}", message.from);
-                    sender.send(message).expect("Failed to send message to mpsc channel");
+                buffer.extend_from_slice(&temp[..bytes_read]);
+                // Process messages in a loop
+                while buffer.len() >= 4 {
+                    // Get the length prefix
+                    let length = u32::from_be_bytes(buffer[..4].try_into().unwrap()) as usize;
+                    // Check if the full message is available
+                    if buffer.len() < 4 + length {
+                        break; // Wait for more data
+                    }
+
+                    // Extract the message
+                    let message_bytes = buffer[4..4 + length].to_vec();
+                    buffer.drain(..4 + length); // Remove processed message from buffer
+
+                    // Deserialize and handle the message
+                    match serde_json::from_slice::<NetworkEvent>(&message_bytes) {
+                        Ok(message) => {
+                            println!("Received message from {}", message.from);
+                            sender.send(Event::Network(message)).expect("Failed to send message to mpsc channel");
+                        }
+                        Err(e) => {
+                            println!("Failed to deserialize message: {}", e);
+                        }
+                    }
                 }
             }
             Err(e) => {

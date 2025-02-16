@@ -1,6 +1,7 @@
+use cs271_final::utils::constants::PROXY_PORT;
 use cs271_final::utils::datastore::DataStore;
+use cs271_final::utils::event::{Event, NetworkPayload};
 use cs271_final::utils::network::Network;
-use cs271_final::utils::network::Message;
 
 use std::{env, io};
 use std::{process, thread};
@@ -25,11 +26,11 @@ fn main() {
         }
     };
 
-    let (sender, receiver): (Sender<Message>, Receiver<Message>) = mpsc::channel();
+    let (sender, receiver): (Sender<Event>, Receiver<Event>) = mpsc::channel();
     let mut network = Network::new(instance_id, sender.clone(), false);
-    if !network.connect_to_proxy(3000) { process::exit(1); }
+    if !network.connect_to_proxy(PROXY_PORT) { process::exit(1); }
     thread::spawn(move || {
-        handle_incoming_events(
+        handle_events(
             network,
             receiver,
             instance_id
@@ -44,13 +45,25 @@ fn main() {
 }
 
 // TODO
-fn handle_incoming_events(mut network: Network, receiver: Receiver<Message>, instance_id: u64){
-    let mut datastore: DataStore = DataStore::load(instance_id);
-
+fn handle_events(_: Network, receiver: Receiver<Event>, instance_id: u64){
+    let datastore: DataStore = DataStore::load(instance_id);
     loop {
         match receiver.recv() {
-            Ok(message) => {
-                network.send_message(message);
+            Ok(event) => {
+                match event {
+                    Event::Local(_) => {
+                        println!("Handling local event");
+                        // Handle local events if any
+                    }
+                    Event::Network(message) => {
+                        let payload = NetworkPayload::deserialize(message.payload).expect("Failed to deserialize payload");
+                        match payload {
+                            NetworkPayload::PrintBalance { id } => {
+                                datastore.print_value(id);
+                            }
+                        }
+                    }
+                }
             }
             Err(_) => {
                 println!("mpsc channel closed");

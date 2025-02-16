@@ -1,5 +1,6 @@
+use cs271_final::utils::constants::{PROXY_INSTANCE_ID, PROXY_PORT};
+use cs271_final::utils::event::Event;
 use cs271_final::utils::network::Network;
-use cs271_final::utils::network::Message;
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::{thread,io};
@@ -8,14 +9,13 @@ use std::sync::{Arc, Mutex};
 use std::fs;
 
 fn main() {
-    // Proxy is instance 0
-    let (sender, receiver): (Sender<Message>, Receiver<Message>) = mpsc::channel();
-    let mut network = Network::new(0, sender.clone(), true);
+    let (sender, receiver): (Sender<Event>, Receiver<Event>) = mpsc::channel();
+    let mut network = Network::new(PROXY_INSTANCE_ID, sender.clone(), true);
     let config_map = Arc::new(Mutex::new(load_config("config.txt")));
     let config_map_clone = config_map.clone();
-    network.listen_for_instances(3000);
+    network.listen_for_instances(PROXY_PORT);
     thread::spawn(move || {
-        handle_incoming_events(
+        handle_events(
             network,
             receiver,
             config_map_clone
@@ -49,16 +49,25 @@ fn update_config(config_map: &Arc<Mutex<HashMap<u64, usize>>>, file_path: &str) 
     println!("Configuration updated.");
 }
 
-fn handle_incoming_events(mut network: Network, receiver: Receiver<Message>, config_map: Arc<Mutex<HashMap<u64, usize>>>){
+fn handle_events(mut network: Network, receiver: Receiver<Event>, config_map: Arc<Mutex<HashMap<u64, usize>>>){
     loop {
         match receiver.recv() {
-            Ok(message) => {
-                let config = config_map.lock().unwrap();
-                if config.get(&message.from) == config.get(&message.to) {
-                    println!("Relaying message from {} to {}", message.from, message.to);
-                    network.send_message(message);
-                } else {
-                    println!("Dropping message from {} to {} due to partitioning", message.from, message.to);
+            Ok(event) => {
+                match event {
+                    Event::Local(_) => {
+                        println!("Handling local event");
+                        // Handle local events if any
+                    }
+                    Event::Network(message) => {
+                        println!("Handling network event from {} to {}", message.from, message.to);
+                        let config = config_map.lock().unwrap();
+                        if config.get(&message.from) == config.get(&message.to) {
+                            println!("Relaying message from {} to {}", message.from, message.to);
+                            network.send_message(message);
+                        } else {
+                            println!("Dropping message from {} to {} due to partitioning", message.from, message.to);
+                        }
+                    }
                 }
             }
             Err(_) => {

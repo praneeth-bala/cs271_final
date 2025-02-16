@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -81,6 +82,27 @@ impl DataStore {
             println!("Key {}: Value {}", id, value);
         } else {
             println!("Key {} not found on Server {}", id, self.instance_id);
+        }
+    }
+
+    pub fn get_random_instance_from_id(id: u64) -> u64 {
+        let mut rng = rand::rng();
+        if id<=1000 {
+            rng.random_range(1..=3) as u64
+        } else if id<=2000 {
+            rng.random_range(4..=6) as u64
+        } else {
+            rng.random_range(7..=9) as u64
+        }
+    }
+
+    pub fn get_all_instances_from_id(id: u64) -> Vec<u64> {
+        if id<=1000 {
+            vec![1,2,3]
+        } else if id<=2000 {
+            vec![4,5,6]
+        } else {
+            vec![7,8,9]
         }
     }
 }
