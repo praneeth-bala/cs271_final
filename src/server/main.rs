@@ -3,9 +3,9 @@ use cs271_final::utils::datastore::DataStore;
 use cs271_final::utils::event::{Event, NetworkPayload};
 use cs271_final::utils::network::Network;
 
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::{env, io};
 use std::{process, thread};
-use std::sync::mpsc::{self, Receiver, Sender};
 
 fn main() {
     // Collect command-line arguments
@@ -28,13 +28,11 @@ fn main() {
 
     let (sender, receiver): (Sender<Event>, Receiver<Event>) = mpsc::channel();
     let mut network = Network::new(instance_id, sender.clone(), false);
-    if !network.connect_to_proxy(PROXY_PORT) { process::exit(1); }
+    if !network.connect_to_proxy(PROXY_PORT) {
+        process::exit(1);
+    }
     thread::spawn(move || {
-        handle_events(
-            network,
-            receiver,
-            instance_id
-        );
+        handle_events(network, receiver, instance_id);
     });
 
     println!("Server {} started!", instance_id);
@@ -45,7 +43,7 @@ fn main() {
 }
 
 // TODO
-fn handle_events(_: Network, receiver: Receiver<Event>, instance_id: u64){
+fn handle_events(_: Network, receiver: Receiver<Event>, instance_id: u64) {
     let datastore: DataStore = DataStore::load(instance_id);
     loop {
         match receiver.recv() {
@@ -56,11 +54,16 @@ fn handle_events(_: Network, receiver: Receiver<Event>, instance_id: u64){
                         // Handle local events if any
                     }
                     Event::Network(message) => {
-                        let payload = NetworkPayload::deserialize(message.payload).expect("Failed to deserialize payload");
+                        let payload = NetworkPayload::deserialize(message.payload)
+                            .expect("Failed to deserialize payload");
                         match payload {
                             NetworkPayload::PrintBalance { id } => {
                                 datastore.print_value(id);
                             }
+                            NetworkPayload::PrintDatastore => {
+                                datastore.print_datastore();
+                            }
+                            NetworkPayload::Transfer { from, to, amount } => todo!(),
                         }
                     }
                 }

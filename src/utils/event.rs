@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use bincode;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NetworkEvent {
@@ -10,7 +10,9 @@ pub struct NetworkEvent {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum NetworkPayload {
-    PrintBalance { id: u64 }
+    PrintBalance { id: u64 },
+    PrintDatastore,
+    Transfer { from: u64, to: u64, amount: i64 },
 }
 
 impl NetworkPayload {
@@ -24,11 +26,13 @@ impl NetworkPayload {
 }
 
 pub struct LocalEvent {
-    pub payload: LocalPayload
+    pub payload: LocalPayload,
 }
 
 pub enum LocalPayload {
-    PrintBalance { id: u64 }
+    PrintBalance { id: u64 },
+    PrintDatastore { instance: u64 },
+    Transfer { from: u64, to: u64, amount: i64 },
 }
 
 pub enum Event {
