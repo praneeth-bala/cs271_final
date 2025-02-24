@@ -6,11 +6,12 @@ use std::thread;
 
 use super::event::{Event, NetworkEvent};
 
+#[derive(Clone)]
 pub struct Network {
-    instance_connection_map: Arc<Mutex<HashMap<u64, TcpStream>>>,
-    sender: Sender<Event>,
-    proxy: bool,
-    instance_id: u64
+    pub instance_connection_map: Arc<Mutex<HashMap<u64, TcpStream>>>,
+    pub sender: Sender<Event>,
+    pub proxy: bool,
+    pub instance_id: u64
 }
 
 impl Network {

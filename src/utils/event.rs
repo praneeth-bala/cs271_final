@@ -1,5 +1,6 @@
 use bincode;
 use serde::{Deserialize, Serialize};
+use crate::utils::datastore::Transaction;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NetworkEvent {
@@ -13,6 +14,10 @@ pub enum NetworkPayload {
     PrintBalance { id: u64 },
     PrintDatastore,
     Transfer { from: u64, to: u64, amount: i64 },
+    RequestVote { term: u64, candidate_id: u64, last_log_index: u64, last_log_term: u64 },
+    AppendEntries { term: u64, leader_id: u64, prev_log_index: u64, prev_log_term: u64, entries: Vec<(u64, Transaction)>, leader_commit: u64 },
+    VoteResponse { term: u64, vote_granted: bool },
+    AppendResponse { term: u64, success: bool },
 }
 
 impl NetworkPayload {
