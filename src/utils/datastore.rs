@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::time::Duration;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Transaction {
@@ -16,6 +17,17 @@ pub struct DataStore {
     pub instance_id: u64,
     pub kv_store: HashMap<u64, i64>,
     pub committed_transactions: Vec<Transaction>,
+
+    pub current_term: u64,         
+    pub voted_for: Option<u64>,    
+    pub log: Vec<LogEntry>,        
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LogEntry {
+    pub term: u64,                 
+    pub index: u64,              
+    pub command: Transaction,     
 }
 
 impl DataStore {
@@ -24,6 +36,9 @@ impl DataStore {
             instance_id,
             kv_store: HashMap::new(),
             committed_transactions: Vec::new(),
+            current_term: 0,         
+            voted_for: None,         
+            log: Vec::new(),
         }
     }
 
@@ -133,5 +148,38 @@ impl DataStore {
         }
         println!("Transaction failed: insufficient funds or invalid account.");
         false
+    }
+
+    // Helper to append an entry to the log
+    pub fn append_log(&mut self, entry: LogEntry) {
+        self.log.push(entry);
+    }
+
+    // Helper to get the last log entry
+    pub fn last_log_entry(&self) -> Option<&LogEntry> {
+        self.log.last()
+    }
+
+    // Helper to check if log is consistent with leader's log
+    pub fn log_is_consistent(&self, prev_log_index: u64, prev_log_term: u64) -> bool {
+        if prev_log_index == 0 {
+            return true;
+        }
+        if prev_log_index > self.log.len() as u64 {
+            return false;
+        }
+        let entry = &self.log[(prev_log_index - 1) as usize];
+        entry.term == prev_log_term
+    }
+
+    // Helper to apply committed log entries to state machine
+    pub fn apply_committed_entries(&mut self, commit_index: u64) {
+        for i in 0..commit_index {
+            if let Some(entry) = self.log.get(i as usize) {
+                if self.kv_store.contains_key(&entry.command.from) && self.kv_store.contains_key(&entry.command.to) {
+                    self.process_transfer(entry.command.from, entry.command.to, entry.command.value);
+                }
+            }
+        }
     }
 }
