@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::time::Duration;
+// use std::time::Duration;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Transaction {
@@ -143,6 +143,7 @@ impl DataStore {
                     "Transaction successful: {} -> {} ({} units)",
                     from, to, amount
                 );
+                self.save_to_file();
                 return true;
             }
         }
@@ -162,19 +163,26 @@ impl DataStore {
 
     // Helper to check if log is consistent with leader's log
     pub fn log_is_consistent(&self, prev_log_index: u64, prev_log_term: u64) -> bool {
-        if prev_log_index == 0 {
-            return true;
+        if prev_log_index == u64::MAX {
+            if self.log.len() == 0 {
+                return true;
+            } else {
+                return false;
+            }
         }
-        if prev_log_index > self.log.len() as u64 {
+        if prev_log_index >= self.log.len() as u64 {
             return false;
         }
-        let entry = &self.log[(prev_log_index - 1) as usize];
+        let entry = &self.log[prev_log_index as usize];
         entry.term == prev_log_term
     }
 
     // Helper to apply committed log entries to state machine
     pub fn apply_committed_entries(&mut self, commit_index: u64) {
-        for i in 0..commit_index {
+        if commit_index == u64::MAX {
+            return;
+        }
+        for i in self.committed_transactions.len() as u64..commit_index+1 {
             if let Some(entry) = self.log.get(i as usize) {
                 if self.kv_store.contains_key(&entry.command.from) && self.kv_store.contains_key(&entry.command.to) {
                     self.process_transfer(entry.command.from, entry.command.to, entry.command.value);

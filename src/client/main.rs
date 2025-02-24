@@ -128,7 +128,17 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     payload: NetworkPayload::PrintDatastore.serialize(),
                                 });
                             }
-                            LocalPayload::Transfer { from, to, amount } => todo!(),
+                            LocalPayload::Transfer { from, to, amount } => {
+                                if from / 1000 == to / 1000 {
+                                    network.send_message(NetworkEvent {
+                                        from: CLIENT_INSTANCE_ID,
+                                        to: DataStore::get_random_instance_from_id(from),
+                                        payload: NetworkPayload::Transfer { from, to, amount }
+                                            .serialize(),
+                                    });
+                                }
+                            },
+                            _ => {}
                         }
                     }
                     Event::Network(message) => {

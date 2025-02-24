@@ -58,6 +58,9 @@ pub enum LocalPayload {
     PrintBalance { id: u64 },
     PrintDatastore { instance: u64 },
     Transfer { from: u64, to: u64, amount: i64 },
+
+    SendHeartbeat,
+    StartElection,
 }
 
 pub enum Event {
