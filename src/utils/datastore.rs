@@ -1,6 +1,6 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::Duration;
@@ -15,7 +15,7 @@ pub struct Transaction {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DataStore {
     pub instance_id: u64,
-    pub kv_store: HashMap<u64, i64>,
+    pub kv_store: BTreeMap<u64, i64>,
     pub committed_transactions: Vec<Transaction>,
 
     pub current_term: u64,         
@@ -34,7 +34,7 @@ impl DataStore {
     pub fn new(instance_id: u64) -> Self {
         Self {
             instance_id,
-            kv_store: HashMap::new(),
+            kv_store: BTreeMap::new(),
             committed_transactions: Vec::new(),
             current_term: 0,         
             voted_for: None,         
