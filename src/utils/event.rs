@@ -29,10 +29,10 @@ pub enum NetworkPayload {
     AppendEntries {
         term: u64,                    // Leader's term
         leader_id: u64,               // So follower can redirect clients
-        prev_log_index: u64,          // Index of log entry immediately preceding new ones
-        prev_log_term: u64,           // Term of prevLogIndex entry
+        prev_log_index: Option<u64>,          // Index of log entry immediately preceding new ones
+        prev_log_term: Option<u64>,           // Term of prevLogIndex entry
         entries: Vec<LogEntry>,       // Log entries to store (empty for heartbeat)
-        leader_commit: u64,           // Leader's commitIndex
+        leader_commit: Option<u64>,           // Leader's commitIndex
     },
     AppendEntriesResponse {
         term: u64,                    // Current term for the responder

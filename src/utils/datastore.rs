@@ -17,9 +17,7 @@ pub struct DataStore {
     pub instance_id: u64,
     pub kv_store: BTreeMap<u64, i64>,
     pub committed_transactions: Vec<Transaction>,
-
-    pub current_term: u64,         
-    pub voted_for: Option<u64>,    
+    
     pub log: Vec<LogEntry>,        
 }
 
@@ -35,9 +33,7 @@ impl DataStore {
         Self {
             instance_id,
             kv_store: BTreeMap::new(),
-            committed_transactions: Vec::new(),
-            current_term: 0,         
-            voted_for: None,         
+            committed_transactions: Vec::new(),        
             log: Vec::new(),
         }
     }
@@ -162,27 +158,34 @@ impl DataStore {
     }
 
     // Helper to check if log is consistent with leader's log
-    pub fn log_is_consistent(&self, prev_log_index: u64, prev_log_term: u64) -> bool {
-        if prev_log_index == u64::MAX {
+    pub fn log_is_consistent(&self, prev_log_index: &Option<u64>, prev_log_term: &Option<u64>) -> bool {
+        if prev_log_index.is_none() {
             if self.log.len() == 0 {
                 return true;
             } else {
                 return false;
             }
         }
-        if prev_log_index >= self.log.len() as u64 {
+        if prev_log_index.unwrap() >= self.log.len() as u64 {
             return false;
         }
-        let entry = &self.log[prev_log_index as usize];
-        entry.term == prev_log_term
+        let entry = &self.log[prev_log_index.unwrap() as usize];
+        entry.term == prev_log_term.unwrap()
     }
 
     // Helper to apply committed log entries to state machine
-    pub fn apply_committed_entries(&mut self, commit_index: u64) {
-        if commit_index == u64::MAX {
+    pub fn apply_committed_entries(&mut self, commit_index: &Option<u64>) {
+        if commit_index.is_none() {
             return;
         }
-        for i in self.committed_transactions.len() as u64..commit_index+1 {
+        if commit_index.unwrap() >= self.log.len() as u64 {
+            return;
+        }
+        println!(
+            "Server {} applying committed entries up to index {}",
+            self.instance_id, commit_index.unwrap()
+        );
+        for i in self.committed_transactions.len() as u64..commit_index.unwrap()+1 {
             if let Some(entry) = self.log.get(i as usize) {
                 if self.kv_store.contains_key(&entry.command.from) && self.kv_store.contains_key(&entry.command.to) {
                     self.process_transfer(entry.command.from, entry.command.to, entry.command.value);
