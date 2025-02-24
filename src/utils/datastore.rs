@@ -150,6 +150,7 @@ impl DataStore {
     // Helper to append an entry to the log
     pub fn append_log(&mut self, entry: LogEntry) {
         self.log.push(entry);
+        self.save_to_file();
     }
 
     // Helper to get log entry

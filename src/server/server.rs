@@ -214,19 +214,6 @@ impl RaftServer {
                 entries,
                 leader_commit,
             } => {
-                if entries.len() == 0 {
-                    println!("Server {} received heartbeat from {}", self.instance_id, from);
-                    self.leader_id = Some(from);
-                    // Update commit index
-                    if leader_commit.is_some() && leader_commit.unwrap() < self.datastore.log.len() {
-                        println!(
-                            "Server {} applying committed entries up to index {}",
-                            self.instance_id, leader_commit.unwrap()
-                        );
-                        self.datastore.update_commit_from_index(&leader_commit);
-                    }
-                    return;
-                }
                 if term < self.current_term {
                     println!(
                         "Server {} rejecting AppendEntries from {}: term {} < current term {}",
@@ -260,7 +247,7 @@ impl RaftServer {
                         .datastore
                         .log_is_consistent(&prev_log_index, &prev_log_term)
                 {
-                    println!("Server {} rejecting AppendEntries from {}: log inconsistency", self.instance_id, leader_id);
+                    println!("Server {} rejecting AppendEntries from {}: log inconsistency prev_index:{}, term:{}", self.instance_id, leader_id, prev_log_index.unwrap_or(1337), prev_log_term.unwrap_or(1337));
                     network.send_message(NetworkEvent {
                         from: self.instance_id,
                         to: from,
@@ -416,7 +403,11 @@ impl RaftServer {
                             Some(last_log.unwrap().index - 1)
                         }
                     } else {
-                        None
+                        if self.next_index[&server] == 0 {
+                            None
+                        } else {
+                            Some(self.next_index[&server] - 1)
+                        }
                     },
                     prev_log_term: if last_log.is_some() {
                         if last_log.unwrap().index == 0 {
@@ -425,7 +416,11 @@ impl RaftServer {
                             Some(self.datastore.log_entry((last_log.unwrap().index - 1) as usize).unwrap().term)
                         }
                     } else {
-                        None
+                        if self.next_index[&server] == 0 {
+                            None
+                        } else {
+                            Some(self.datastore.log_entry(self.next_index[&server] - 1).unwrap().term)
+                        }
                     },
                     entries: if last_log.is_some() && !heartbeat {
                         self.datastore.log_slice(self.next_index[&server])
