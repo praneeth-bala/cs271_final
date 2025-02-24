@@ -31,6 +31,7 @@ impl RaftServer {
         } else {
             vec![7, 8, 9] // Cluster C3
         };
+        println!("Server {} initialized as Follower in cluster {:?}", instance_id, cluster);
         RaftServer {
             role: ServerRole::Follower,
             datastore: DataStore::load(instance_id),
@@ -42,6 +43,7 @@ impl RaftServer {
     }
 
     fn start_election(&mut self, network: &mut Network) {
+        println!("Server {} starting election in term {}", self.datastore.instance_id, self.datastore.current_term);
         self.role = ServerRole::Candidate;
         self.datastore.current_term += 1;
         self.datastore.voted_for = Some(self.datastore.instance_id);
@@ -57,6 +59,7 @@ impl RaftServer {
         };
         for server in &self.cluster_servers {
             if *server != self.datastore.instance_id {
+                println!("Server {} sending RequestVote to server {} in term {}", self.datastore.instance_id, server, self.datastore.current_term);
                 network.send_message(NetworkEvent {
                     from: self.datastore.instance_id,
                     to: *server,
@@ -67,12 +70,17 @@ impl RaftServer {
     }
 
     fn step_down(&mut self) {
+        println!("Server {} stepping down to Follower in term {}", self.datastore.instance_id, self.datastore.current_term);
         self.role = ServerRole::Follower;
         self.datastore.voted_for = None;
         self.votes_received = 0;
     }
 
     fn handle_request_vote(&mut self, request: NetworkPayload, from: u64) -> NetworkPayload {
+        println!("Server {} received RequestVote from {} in term {:?}", self.datastore.instance_id, from, match request {
+            NetworkPayload::RequestVote { term, .. } => term,
+            _ => 0,
+        });
         match request {
             NetworkPayload::RequestVote {
                 term,
@@ -81,6 +89,7 @@ impl RaftServer {
                 last_log_term,
             } => {
                 if term < self.datastore.current_term {
+                    println!("Server {} rejecting RequestVote from {}: term {} < current term {}", self.datastore.instance_id, candidate_id, term, self.datastore.current_term);
                     return NetworkPayload::VoteResponse {
                         term: self.datastore.current_term,
                         vote_granted: false,
@@ -88,6 +97,7 @@ impl RaftServer {
                 }
 
                 if term > self.datastore.current_term {
+                    println!("Server {} updating term to {} and stepping down", self.datastore.instance_id, term);
                     self.datastore.current_term = term;
                     self.step_down();
                 }
@@ -102,7 +112,10 @@ impl RaftServer {
                 let grant_vote = !already_voted && up_to_date;
 
                 if grant_vote {
+                    println!("Server {} granting vote to candidate {} in term {}", self.datastore.instance_id, candidate_id, term);
                     self.datastore.voted_for = Some(candidate_id);
+                } else {
+                    println!("Server {} denying vote to candidate {} in term {}: already voted or log not up-to-date", self.datastore.instance_id, candidate_id, term);
                 }
 
                 NetworkPayload::VoteResponse {
@@ -115,6 +128,10 @@ impl RaftServer {
     }
 
     fn handle_append_entries(&mut self, request: NetworkPayload, from: u64) -> NetworkPayload {
+        println!("Server {} received AppendEntries from {} in term {:?}", self.datastore.instance_id, from, match request {
+            NetworkPayload::AppendEntries { term, .. } => term,
+            _ => 0,
+        });
         match request {
             NetworkPayload::AppendEntries {
                 term,
@@ -125,6 +142,7 @@ impl RaftServer {
                 leader_commit,
             } => {
                 if term < self.datastore.current_term {
+                    println!("Server {} rejecting AppendEntries from {}: term {} < current term {}", self.datastore.instance_id, leader_id, term, self.datastore.current_term);
                     return NetworkPayload::AppendEntriesResponse {
                         term: self.datastore.current_term,
                         success: false,
@@ -132,6 +150,7 @@ impl RaftServer {
                 }
 
                 if term > self.datastore.current_term {
+                    println!("Server {} updating term to {} and stepping down", self.datastore.instance_id, term);
                     self.datastore.current_term = term;
                     self.step_down();
                 }
@@ -139,6 +158,7 @@ impl RaftServer {
                 self.role = ServerRole::Follower; // Reset to follower on receiving valid AppendEntries
 
                 if prev_log_index > 0 && !self.datastore.log_is_consistent(prev_log_index, prev_log_term) {
+                    println!("Server {} rejecting AppendEntries from {}: log inconsistency at index {} term {}", self.datastore.instance_id, leader_id, prev_log_index, prev_log_term);
                     return NetworkPayload::AppendEntriesResponse {
                         term: self.datastore.current_term,
                         success: false,
@@ -147,19 +167,22 @@ impl RaftServer {
 
                 // Append new entries
                 let start_index = prev_log_index as usize + 1;
-                for entry in entries {
+                for entry in &entries {
+                    println!("Server {} appending log entry at index {} in term {}", self.datastore.instance_id, entry.index, entry.term);
                     if start_index <= self.datastore.log.len() {
-                        self.datastore.log[start_index - 1] = entry;
+                        self.datastore.log[start_index - 1] = entry.clone();
                     } else {
-                        self.datastore.append_log(entry);
+                        self.datastore.append_log(entry.clone());
                     }
                 }
 
                 // Update commit index
                 if leader_commit > self.datastore.log.len() as u64 {
+                    println!("Server {} applying committed entries up to index {}", self.datastore.instance_id, leader_commit);
                     self.datastore.apply_committed_entries(leader_commit);
                 }
 
+                println!("Server {} accepted AppendEntries from {} successfully", self.datastore.instance_id, leader_id);
                 NetworkPayload::AppendEntriesResponse {
                     term: self.datastore.current_term,
                     success: true,
@@ -170,12 +193,14 @@ impl RaftServer {
     }
 
     fn become_leader(&mut self) {
+        println!("Server {} becoming leader in term {}", self.datastore.instance_id, self.datastore.current_term);
         self.role = ServerRole::Leader;
         // Initialize nextIndex and matchIndex for each follower (simplified for now)
         // For this implementation, we'll assume nextIndex starts at the end of the log
     }
 
     fn replicate_log(&mut self, network: &mut Network) {
+        println!("Server {} (Leader) sending AppendEntries to cluster in term {}", self.datastore.instance_id, self.datastore.current_term);
         let last_log = self.datastore.last_log_entry().unwrap_or(&LogEntry {
             term: 0,
             index: 0,
@@ -184,15 +209,16 @@ impl RaftServer {
         let request = NetworkPayload::AppendEntries {
             term: self.datastore.current_term,
             leader_id: self.datastore.instance_id,
-            prev_log_index: last_log.index - 1,
+            prev_log_index: if last_log.index > 1 { last_log.index - 1 } else { 0 },
             prev_log_term: if last_log.index > 1 {
                 self.datastore.log[(last_log.index - 2) as usize].term
             } else { 0 },
-            entries: vec![last_log.clone()], // Send the latest entry
+            entries: if last_log.index > 0 { vec![last_log.clone()] } else { vec![] }, // Send the latest entry or empty for heartbeat
             leader_commit: self.datastore.log.len() as u64, // Simplified commit index
         };
         for server in &self.cluster_servers {
             if *server != self.datastore.instance_id {
+                println!("Server {} sending AppendEntries to server {} in term {}", self.datastore.instance_id, server, self.datastore.current_term);
                 network.send_message(NetworkEvent {
                     from: self.datastore.instance_id,
                     to: *server,
@@ -239,7 +265,6 @@ fn main() {
     io::stdin().read_line(&mut input).unwrap();
 }
 
-// TODO
 fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_server: RaftServer) {
     let mut last_election_time = std::time::Instant::now();
     loop {
@@ -248,19 +273,22 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                 match event {
                     Event::Local(_) => {
                         println!("Handling local event");
-                        // Handle local events if any (currently not used in server)
+                        // Handle local events if any
                     }
                     Event::Network(message) => {
                         let payload = NetworkPayload::deserialize(message.payload)
                             .expect("Failed to deserialize payload");
                         match payload {
                             NetworkPayload::PrintBalance { id } => {
+                                println!("Server {} processing PrintBalance for ID {}", raft_server.datastore.instance_id, id);
                                 raft_server.datastore.print_value(id);
                             }
                             NetworkPayload::PrintDatastore => {
+                                println!("Server {} processing PrintDatastore", raft_server.datastore.instance_id);
                                 raft_server.datastore.print_datastore();
                             }
                             NetworkPayload::Transfer { from, to, amount } => {
+                                println!("Server {} received Transfer request: {} -> {} ({} units)", raft_server.datastore.instance_id, from, to, amount);
                                 // For intra-shard, initiate Raft consensus
                                 if from / 1000 == to / 1000 { // Same cluster (shard)
                                     let transaction = Transaction { from, to, value: amount };
@@ -269,21 +297,27 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                                         index: raft_server.datastore.log.len() as u64 + 1,
                                         command: transaction,
                                     };
+                                    println!("Server {} appending log entry for transfer in term {}", raft_server.datastore.instance_id, raft_server.datastore.current_term);
                                     raft_server.datastore.append_log(log_entry);
                                     if raft_server.role == ServerRole::Leader {
-                                        // As leader, replicate log entry to followers
                                         raft_server.replicate_log(&mut network);
                                     } else {
+                                        println!("Server {} not leader, waiting for election or leader response", raft_server.datastore.instance_id);
                                         // Not leader, need to forward to leader or start election
                                         // For now, we'll handle election timeout
                                     }
                                 } else {
                                     // Cross-shard, handle with 2PC (to be implemented later)
+                                    println!("Server {} detected cross-shard transaction, to be handled with 2PC", raft_server.datastore.instance_id);
                                     todo!("Implement 2PC for cross-shard transactions");
                                 }
                             }
                             NetworkPayload::RequestVote { .. } => {
                                 let response = raft_server.handle_request_vote(payload, message.from);
+                                println!("Server {} responding to RequestVote from {} with vote_granted: {}", raft_server.datastore.instance_id, message.from, match response {
+                                    NetworkPayload::VoteResponse { vote_granted, .. } => vote_granted,
+                                    _ => false,
+                                });
                                 network.send_message(NetworkEvent {
                                     from: raft_server.datastore.instance_id,
                                     to: message.from,
@@ -291,22 +325,29 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                                 });
                             }
                             NetworkPayload::VoteResponse { term, vote_granted } => {
+                                println!("Server {} received VoteResponse from {} in term {}, vote_granted: {}", raft_server.datastore.instance_id, message.from, term, vote_granted);
                                 if raft_server.role == ServerRole::Candidate && term == raft_server.datastore.current_term {
                                     if vote_granted {
                                         raft_server.votes_received += 1;
                                         let majority = (raft_server.cluster_servers.len() + 1) / 2; // +1 for self
+                                        println!("Server {} has {} votes, needs {} for majority", raft_server.datastore.instance_id, raft_server.votes_received, majority);
                                         if raft_server.votes_received >= majority {
                                             raft_server.become_leader();
                                             raft_server.replicate_log(&mut network); // Start heartbeats
                                         }
                                     }
                                 } else if term > raft_server.datastore.current_term {
+                                    println!("Server {} updating term to {} and stepping down due to higher term in VoteResponse", raft_server.datastore.instance_id, term);
                                     raft_server.datastore.current_term = term;
                                     raft_server.step_down();
                                 }
                             }
                             NetworkPayload::AppendEntries { .. } => {
                                 let response = raft_server.handle_append_entries(payload, message.from);
+                                println!("Server {} responding to AppendEntries from {} with success: {}", raft_server.datastore.instance_id, message.from, match response {
+                                    NetworkPayload::AppendEntriesResponse { success, .. } => success,
+                                    _ => false,
+                                });
                                 network.send_message(NetworkEvent {
                                     from: raft_server.datastore.instance_id,
                                     to: message.from,
@@ -314,11 +355,14 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                                 });
                             }
                             NetworkPayload::AppendEntriesResponse { term, success } => {
+                                println!("Server {} received AppendEntriesResponse from {} in term {}, success: {}", raft_server.datastore.instance_id, message.from, term, success);
                                 if raft_server.role == ServerRole::Leader && term == raft_server.datastore.current_term {
                                     if success {
+                                        println!("Server {} confirmed log replication success from {}", raft_server.datastore.instance_id, message.from);
                                         // Update matchIndex and nextIndex (simplified for now)
                                         // For this implementation, we assume replication succeeded
                                     } else if term > raft_server.datastore.current_term {
+                                        println!("Server {} updating term to {} and stepping down due to higher term in AppendEntriesResponse", raft_server.datastore.instance_id, term);
                                         raft_server.datastore.current_term = term;
                                         raft_server.step_down();
                                     }
@@ -337,6 +381,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
         // Check election timeout (Follower behavior)
         if raft_server.role == ServerRole::Follower {
             if last_election_time.elapsed() >= raft_server.election_timeout.unwrap() {
+                println!("Server {} election timeout triggered, starting election in term {}", raft_server.datastore.instance_id, raft_server.datastore.current_term);
                 raft_server.start_election(&mut network);
                 last_election_time = std::time::Instant::now();
             }
@@ -345,6 +390,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
         // Check heartbeat timeout (Leader behavior)
         if raft_server.role == ServerRole::Leader {
             if last_election_time.elapsed() >= raft_server.heartbeat_timeout.unwrap() {
+                println!("Server {} (Leader) sending heartbeat in term {}", raft_server.datastore.instance_id, raft_server.datastore.current_term);
                 raft_server.replicate_log(&mut network);
                 last_election_time = std::time::Instant::now();
             }
