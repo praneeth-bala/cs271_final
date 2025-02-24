@@ -101,7 +101,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                             LocalEvent {
                                 payload: LocalPayload::SendHeartbeat,
                             } => {
-                                raft_server.replicate_log(&mut network, true);
+                                raft_server.replicate_log(&mut network, true, None);
                             }
                             LocalEvent {
                                 payload: LocalPayload::StartElection,
@@ -171,6 +171,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                                 raft_server.handle_append_entries_response(
                                     payload,
                                     message.from,
+                                    &mut network
                                 );
                             }
                         }

@@ -1,6 +1,6 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 // use std::time::Duration;
@@ -24,7 +24,7 @@ pub struct DataStore {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LogEntry {
     pub term: u64,                 
-    pub index: u64,              
+    pub index: usize,              
     pub command: Transaction,     
 }
 
@@ -152,13 +152,22 @@ impl DataStore {
         self.log.push(entry);
     }
 
+    // Helper to get log entry
+    pub fn log_entry(&self, index: usize) -> Option<&LogEntry> {
+        self.log.get(index)
+    }
+
+    pub fn log_slice(&self, start: usize) -> Vec<LogEntry> {
+        self.log[start..].iter().cloned().collect()
+    }
+
     // Helper to get the last log entry
     pub fn last_log_entry(&self) -> Option<&LogEntry> {
         self.log.last()
     }
 
     // Helper to check if log is consistent with leader's log
-    pub fn log_is_consistent(&self, prev_log_index: &Option<u64>, prev_log_term: &Option<u64>) -> bool {
+    pub fn log_is_consistent(&self, prev_log_index: &Option<usize>, prev_log_term: &Option<u64>) -> bool {
         if prev_log_index.is_none() {
             if self.log.len() == 0 {
                 return true;
@@ -166,27 +175,47 @@ impl DataStore {
                 return false;
             }
         }
-        if prev_log_index.unwrap() >= self.log.len() as u64 {
+        if prev_log_index.unwrap() >= self.log.len() {
             return false;
         }
-        let entry = &self.log[prev_log_index.unwrap() as usize];
+        let entry = &self.log[prev_log_index.unwrap()];
         entry.term == prev_log_term.unwrap()
     }
 
-    // Helper to apply committed log entries to state machine
-    pub fn apply_committed_entries(&mut self, commit_index: &Option<u64>) {
+    // Check next index for each follower and commit transactions when atleast one log from current term is replicated on majority of servers
+    pub fn calculate_latest_commit(&mut self, next_index: &HashMap<u64, usize>) {
+        let mut indexes: Vec<usize> = next_index.values().cloned().collect();
+        indexes.sort();
+        let commit_index = indexes[indexes.len() / 2];
+        if commit_index >= self.log.len() {
+            return;
+        }
+        println!(
+            "Server {} applying committed entries up to index {}",
+            self.instance_id, commit_index
+        );
+        for i in self.committed_transactions.len()..commit_index + 1 {
+            if let Some(entry) = self.log.get(i) {
+                if self.kv_store.contains_key(&entry.command.from) && self.kv_store.contains_key(&entry.command.to) {
+                    self.process_transfer(entry.command.from, entry.command.to, entry.command.value);
+                }
+            }
+        }
+    }
+
+    pub fn update_commit_from_index(&mut self, commit_index: &Option<usize>) {
         if commit_index.is_none() {
             return;
         }
-        if commit_index.unwrap() >= self.log.len() as u64 {
+        if commit_index.unwrap() >= self.log.len() {
             return;
         }
         println!(
             "Server {} applying committed entries up to index {}",
             self.instance_id, commit_index.unwrap()
         );
-        for i in self.committed_transactions.len() as u64..commit_index.unwrap()+1 {
-            if let Some(entry) = self.log.get(i as usize) {
+        for i in self.committed_transactions.len()..commit_index.unwrap() + 1 {
+            if let Some(entry) = self.log.get(i) {
                 if self.kv_store.contains_key(&entry.command.from) && self.kv_store.contains_key(&entry.command.to) {
                     self.process_transfer(entry.command.from, entry.command.to, entry.command.value);
                 }

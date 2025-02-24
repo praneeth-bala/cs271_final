@@ -2,6 +2,7 @@ use cs271_final::utils::datastore::{DataStore, LogEntry, Transaction};
 use cs271_final::utils::event::{NetworkEvent, NetworkPayload};
 use cs271_final::utils::network::Network;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -15,6 +16,7 @@ pub struct RaftServer {
     pub role: Arc<Mutex<ServerRole>>,
     pub datastore: DataStore,
     pub cluster_servers: Vec<u64>,
+    pub next_index: HashMap<u64, usize>,
     pub instance_id: u64,
     pub leader_id: Option<u64>,
 
@@ -32,6 +34,7 @@ impl RaftServer {
         } else {
             vec![7, 8, 9] // Cluster C3
         };
+        let next_index = cluster.iter().map(|&server| (server, 0)).collect();
         println!(
             "Server {} initialized as Follower in cluster {:?}",
             instance_id, cluster
@@ -41,6 +44,7 @@ impl RaftServer {
             datastore: DataStore::load(instance_id),
             votes_received: 0,
             cluster_servers: cluster,
+            next_index,
             instance_id,
             leader_id: None,
             current_term: 0,
@@ -182,7 +186,12 @@ impl RaftServer {
                             if self.votes_received >= majority {
                                 self.become_leader();
                                 self.leader_id = Some(self.instance_id);
-                                // Start heartbeats
+                                // Set next index of all followers to the end of the log
+                                for server in &self.cluster_servers {
+                                    if *server != self.instance_id {
+                                        self.next_index.insert(*server, self.datastore.log.len());
+                                    }
+                                }
                             }
                         }
                     } else if term > self.current_term {
@@ -209,12 +218,12 @@ impl RaftServer {
                     println!("Server {} received heartbeat from {}", self.instance_id, from);
                     self.leader_id = Some(from);
                     // Update commit index
-                    if leader_commit.is_some() && leader_commit.unwrap() < self.datastore.log.len() as u64 {
+                    if leader_commit.is_some() && leader_commit.unwrap() < self.datastore.log.len() {
                         println!(
                             "Server {} applying committed entries up to index {}",
                             self.instance_id, leader_commit.unwrap()
                         );
-                        self.datastore.apply_committed_entries(&leader_commit);
+                        self.datastore.update_commit_from_index(&leader_commit);
                     }
                     return;
                 }
@@ -265,7 +274,7 @@ impl RaftServer {
                 }
 
                 // Append new entries
-                let start_index = if prev_log_index.is_some() {prev_log_index.unwrap() as usize + 1} else {0};
+                let mut start_index = if prev_log_index.is_some() {prev_log_index.unwrap() as usize + 1} else {0};
                 for entry in &entries {
                     println!(
                         "Server {} appending log entry at index {} in term {}",
@@ -276,10 +285,11 @@ impl RaftServer {
                     } else {
                         self.datastore.append_log(entry.clone());
                     }
+                    start_index += 1;
                 }
 
                 // Update commit index
-                self.datastore.apply_committed_entries(&leader_commit);
+                self.datastore.update_commit_from_index(&leader_commit);
 
                 println!(
                     "Server {} accepted AppendEntries from {} successfully",
@@ -300,7 +310,7 @@ impl RaftServer {
         }
     }
 
-    pub fn handle_append_entries_response(&mut self, request: NetworkPayload, from: u64) {
+    pub fn handle_append_entries_response(&mut self, request: NetworkPayload, from: u64, network: &mut Network) {
         match request {
             NetworkPayload::AppendEntriesResponse { term, success } => {
                 if *self.role.lock().unwrap() == ServerRole::Leader
@@ -311,14 +321,18 @@ impl RaftServer {
                             "Server {} confirmed log replication success from {}",
                             self.instance_id, from
                         );
-                        self.datastore.apply_committed_entries(
-                        &Some(self.datastore.log.len() as u64),
-                        );
+                        self.next_index.insert(from, self.datastore.log.len());
+                        self.datastore.calculate_latest_commit(&self.next_index);
                     } else if term > self.current_term {
                         println!("Server {} updating term to {} and stepping down due to higher term in AppendEntriesResponse", self.instance_id, term);
                         self.current_term = term;
                         self.step_down();
                         self.leader_id = Some(from);
+                    } else {
+                        println!("Server {} detected log inconsistency with follower {}", self.instance_id, from);
+                        // Decrement nextIndex and retry
+                        self.next_index.insert(from, self.next_index[&from] - 1);
+                        self.replicate_log(network, false, Some(from));
                     }
                 }
             }
@@ -350,7 +364,7 @@ impl RaftServer {
                     };
                     let log_entry = LogEntry {
                         term: self.current_term,
-                        index: self.datastore.log.len() as u64,
+                        index: self.datastore.log.len(),
                         command: transaction,
                     };
                     println!(
@@ -359,7 +373,7 @@ impl RaftServer {
                         self.current_term
                     );
                     self.datastore.append_log(log_entry);
-                    self.replicate_log(network, false);
+                    self.replicate_log(network, false, None);
                 } else {
                     // Cross-shard, handle with 2PC (to be implemented later)
                     println!("Server {} detected cross-shard transaction, to be handled with 2PC", self.instance_id);
@@ -380,47 +394,46 @@ impl RaftServer {
         // For this implementation, we'll assume nextIndex starts at the end of the log
     }
 
-    pub fn replicate_log(&mut self, network: &mut Network, heartbeat: bool) {
+    pub fn replicate_log(&mut self, network: &mut Network, heartbeat: bool, on: Option<u64>) {
         println!(
             "Server {} (Leader) sending AppendEntries to cluster in term {}",
             self.instance_id, self.current_term
         );
-        let last_log = self.datastore.last_log_entry();
-        let request = NetworkPayload::AppendEntries {
-            term: self.current_term,
-            leader_id: self.instance_id,
-            prev_log_index: if last_log.is_some() {
-                if last_log.unwrap().index == 0 {
-                    None
-                } else {
-                    Some(last_log.unwrap().index - 1)
-                }
-            } else {
-                None
-            },
-            prev_log_term: if last_log.is_some() {
-                if last_log.unwrap().index == 0 {
-                    None
-                } else {
-                    Some(self.datastore.log[(last_log.unwrap().index - 1) as usize].term)
-                }
-            } else {
-                None
-            },
-            entries: if last_log.is_some() && !heartbeat {
-                vec![last_log.unwrap().clone()]
-            } else {
-                vec![]
-            }, // Send the latest entry or empty for heartbeat
-            leader_commit: if last_log.is_some() {Some(self.datastore.log.len() as u64 - 1)} else { None }, // Simplified commit index
-        };
-
         for server in &self.cluster_servers {
-            if *server != self.instance_id {
+            if *server != self.instance_id && (on.is_none() || on.unwrap() == *server) {
                 println!(
                     "Server {} sending AppendEntries to server {} in term {}",
                     self.instance_id, server, self.current_term
                 );
+                let last_log = self.datastore.log_entry(self.next_index[&server]);
+                let request = NetworkPayload::AppendEntries {
+                    term: self.current_term,
+                    leader_id: self.instance_id,
+                    prev_log_index: if last_log.is_some() {
+                        if last_log.unwrap().index == 0 {
+                            None
+                        } else {
+                            Some(last_log.unwrap().index - 1)
+                        }
+                    } else {
+                        None
+                    },
+                    prev_log_term: if last_log.is_some() {
+                        if last_log.unwrap().index == 0 {
+                            None
+                        } else {
+                            Some(self.datastore.log_entry((last_log.unwrap().index - 1) as usize).unwrap().term)
+                        }
+                    } else {
+                        None
+                    },
+                    entries: if last_log.is_some() && !heartbeat {
+                        self.datastore.log_slice(self.next_index[&server])
+                    } else {
+                        vec![]
+                    }, // Send the latest entry or empty for heartbeat
+                    leader_commit: if self.datastore.committed_transactions.len() > 0 { Some(self.datastore.committed_transactions.len()-1) } else { None },
+                };
                 network.send_message(NetworkEvent {
                     from: self.instance_id,
                     to: *server,
