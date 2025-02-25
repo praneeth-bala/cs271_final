@@ -309,7 +309,7 @@ impl RaftServer {
                             self.instance_id, from
                         );
                         self.next_index.insert(from, self.datastore.log.len());
-                        self.datastore.calculate_latest_commit(&self.next_index);
+                        self.datastore.calculate_latest_commit(&self.next_index, self.current_term);
                     } else if term > self.current_term {
                         println!("Server {} updating term to {} and stepping down due to higher term in AppendEntriesResponse", self.instance_id, term);
                         self.current_term = term;
@@ -378,8 +378,6 @@ impl RaftServer {
             self.instance_id, self.current_term
         );
         *self.role.lock().unwrap() = ServerRole::Leader;
-        // Initialize nextIndex and matchIndex for each follower (simplified for now)
-        // For this implementation, we'll assume nextIndex starts at the end of the log
     }
 
     pub fn replicate_log(&mut self, network: &mut Network, heartbeat: bool, on: Option<u64>) {
@@ -427,7 +425,7 @@ impl RaftServer {
                         self.datastore.log_slice(self.next_index[&server])
                     } else {
                         vec![]
-                    }, // Send the latest entry or empty for heartbeat
+                    },
                     leader_commit: if self.datastore.committed_transactions.len() > 0 { Some(self.datastore.committed_transactions.len()-1) } else { None },
                 };
                 network.send_message(NetworkEvent {
