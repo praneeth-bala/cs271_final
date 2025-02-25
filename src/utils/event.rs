@@ -37,6 +37,7 @@ pub enum NetworkPayload {
     AppendEntriesResponse {
         term: u64,                    // Current term for the responder
         success: bool,                // True if follower contained matching entries
+        next_index: usize,    // Latest index of the follower
     },
 }
 

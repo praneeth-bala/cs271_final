@@ -184,14 +184,14 @@ impl DataStore {
     }
 
     // Check next index for each follower and commit transactions when atleast one log from current term is replicated on majority of servers
-    pub fn calculate_latest_commit(&mut self, next_index: &HashMap<u64, usize>, current_term: u64) {
-        let mut indexes: Vec<usize> = next_index.values().cloned().collect();
+    pub fn calculate_latest_commit(&mut self, commit_index_map: &HashMap<u64, usize>, current_term: u64) {
+        let mut indexes: Vec<usize> = commit_index_map.values().cloned().collect();
         indexes.sort();
         let commit_index = indexes[indexes.len() / 2];
         if commit_index > self.log.len() {
             return;
         }
-        if self.log_entry(commit_index).unwrap().term != current_term {
+        if commit_index!=0 && self.log_entry(commit_index-1).unwrap().term != current_term {
             return;
         }
         println!(
@@ -207,7 +207,7 @@ impl DataStore {
         }
     }
 
-    // Apply commit based on leader commit index
+    // Apply commit based on leader commit
     pub fn update_commit_from_index(&mut self, commit_index: &Option<usize>) {
         if commit_index.is_none() {
             return;

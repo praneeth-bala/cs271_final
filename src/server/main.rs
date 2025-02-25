@@ -101,7 +101,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                             LocalEvent {
                                 payload: LocalPayload::SendHeartbeat,
                             } => {
-                                raft_server.replicate_log(&mut network, true, None);
+                                raft_server.replicate_log(&mut network, None);
                             }
                             LocalEvent {
                                 payload: LocalPayload::StartElection,
@@ -166,7 +166,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                                     &mut network,
                                 );
                             }
-                            NetworkPayload::AppendEntriesResponse { term, success } => {
+                            NetworkPayload::AppendEntriesResponse { term, success, .. } => {
                                 println!("Server {} received AppendEntriesResponse from {} in term {}, success: {}", raft_server.instance_id, message.from, term, success);
                                 raft_server.handle_append_entries_response(
                                     payload,

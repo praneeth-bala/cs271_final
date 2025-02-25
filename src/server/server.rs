@@ -16,7 +16,8 @@ pub struct RaftServer {
     pub role: Arc<Mutex<ServerRole>>,
     pub datastore: DataStore,
     pub cluster_servers: Vec<u64>,
-    pub next_index: HashMap<u64, usize>,
+    pub next_index_map: HashMap<u64, usize>,
+    pub commit_index_map: HashMap<u64, usize>,
     pub instance_id: u64,
     pub leader_id: Option<u64>,
 
@@ -34,7 +35,8 @@ impl RaftServer {
         } else {
             vec![7, 8, 9] // Cluster C3
         };
-        let next_index = cluster.iter().map(|&server| (server, 0)).collect();
+        let next_index_map = cluster.iter().map(|&server| (server, 0)).collect();
+        let commit_index_map = cluster.iter().map(|&server| (server, 0)).collect();
         println!(
             "Server {} initialized as Follower in cluster {:?}",
             instance_id, cluster
@@ -44,7 +46,8 @@ impl RaftServer {
             datastore: DataStore::load(instance_id),
             votes_received: 0,
             cluster_servers: cluster,
-            next_index,
+            next_index_map,
+            commit_index_map,
             instance_id,
             leader_id: None,
             current_term: 0,
@@ -188,10 +191,10 @@ impl RaftServer {
                                 self.leader_id = Some(self.instance_id);
                                 // Set next index of all followers to the end of the log
                                 for server in &self.cluster_servers {
-                                    if *server != self.instance_id {
-                                        self.next_index.insert(*server, self.datastore.log.len());
-                                    }
+                                    self.next_index_map.insert(*server, self.datastore.log.len());
+                                    self.commit_index_map.insert(*server, 0);
                                 }
+                                self.commit_index_map.insert(self.instance_id, self.datastore.log.len());
                             }
                         }
                     } else if term > self.current_term {
@@ -225,6 +228,7 @@ impl RaftServer {
                         payload: NetworkPayload::AppendEntriesResponse {
                             term: self.current_term,
                             success: false,
+                            next_index: self.datastore.log.len(),
                         }
                         .serialize(),
                     });
@@ -254,6 +258,7 @@ impl RaftServer {
                         payload: NetworkPayload::AppendEntriesResponse {
                             term: self.current_term,
                             success: false,
+                            next_index: self.datastore.log.len(),
                         }
                         .serialize(),
                     });
@@ -288,6 +293,7 @@ impl RaftServer {
                     payload: NetworkPayload::AppendEntriesResponse {
                         term: self.current_term,
                         success: true,
+                        next_index: self.datastore.log.len(),
                     }
                     .serialize(),
                 });
@@ -299,7 +305,7 @@ impl RaftServer {
 
     pub fn handle_append_entries_response(&mut self, request: NetworkPayload, from: u64, network: &mut Network) {
         match request {
-            NetworkPayload::AppendEntriesResponse { term, success } => {
+            NetworkPayload::AppendEntriesResponse { term, success, next_index } => {
                 if *self.role.lock().unwrap() == ServerRole::Leader
                     && term == self.current_term
                 {
@@ -308,8 +314,9 @@ impl RaftServer {
                             "Server {} confirmed log replication success from {}",
                             self.instance_id, from
                         );
-                        self.next_index.insert(from, self.datastore.log.len());
-                        self.datastore.calculate_latest_commit(&self.next_index, self.current_term);
+                        self.next_index_map.insert(from, next_index);
+                        self.commit_index_map.insert(from, next_index);
+                        self.datastore.calculate_latest_commit(&self.commit_index_map, self.current_term);
                     } else if term > self.current_term {
                         println!("Server {} updating term to {} and stepping down due to higher term in AppendEntriesResponse", self.instance_id, term);
                         self.current_term = term;
@@ -318,8 +325,8 @@ impl RaftServer {
                     } else {
                         println!("Server {} detected log inconsistency with follower {}", self.instance_id, from);
                         // Decrement nextIndex and retry
-                        self.next_index.insert(from, self.next_index[&from] - 1);
-                        self.replicate_log(network, false, Some(from));
+                        self.next_index_map.insert(from, self.next_index_map[&from] - 1);
+                        self.replicate_log(network, Some(from));
                     }
                 }
             }
@@ -360,8 +367,9 @@ impl RaftServer {
                         self.current_term
                     );
                     self.datastore.append_log(log_entry);
-                    self.next_index.insert(self.instance_id, self.datastore.log.len());
-                    self.replicate_log(network, false, None);
+                    self.next_index_map.insert(self.instance_id, self.datastore.log.len());
+                    self.commit_index_map.insert(self.instance_id, self.datastore.log.len());
+                    self.replicate_log(network, None);
                 } else {
                     // Cross-shard, handle with 2PC (to be implemented later)
                     println!("Server {} detected cross-shard transaction, to be handled with 2PC", self.instance_id);
@@ -380,7 +388,7 @@ impl RaftServer {
         *self.role.lock().unwrap() = ServerRole::Leader;
     }
 
-    pub fn replicate_log(&mut self, network: &mut Network, heartbeat: bool, on: Option<u64>) {
+    pub fn replicate_log(&mut self, network: &mut Network, on: Option<u64>) {
         println!(
             "Server {} (Leader) sending AppendEntries to cluster in term {}",
             self.instance_id, self.current_term
@@ -391,7 +399,7 @@ impl RaftServer {
                     "Server {} sending AppendEntries to server {} in term {}",
                     self.instance_id, server, self.current_term
                 );
-                let last_log = self.datastore.log_entry(self.next_index[&server]);
+                let last_log = self.datastore.log_entry(self.next_index_map[&server]);
                 let request = NetworkPayload::AppendEntries {
                     term: self.current_term,
                     leader_id: self.instance_id,
@@ -402,10 +410,10 @@ impl RaftServer {
                             Some(last_log.unwrap().index - 1)
                         }
                     } else {
-                        if self.next_index[&server] == 0 {
+                        if self.next_index_map[&server] == 0 {
                             None
                         } else {
-                            Some(self.next_index[&server] - 1)
+                            Some(self.next_index_map[&server] - 1)
                         }
                     },
                     prev_log_term: if last_log.is_some() {
@@ -415,14 +423,14 @@ impl RaftServer {
                             Some(self.datastore.log_entry((last_log.unwrap().index - 1) as usize).unwrap().term)
                         }
                     } else {
-                        if self.next_index[&server] == 0 {
+                        if self.next_index_map[&server] == 0 {
                             None
                         } else {
-                            Some(self.datastore.log_entry(self.next_index[&server] - 1).unwrap().term)
+                            Some(self.datastore.log_entry(self.next_index_map[&server] - 1).unwrap().term)
                         }
                     },
-                    entries: if last_log.is_some() && !heartbeat {
-                        self.datastore.log_slice(self.next_index[&server])
+                    entries: if last_log.is_some() {
+                        self.datastore.log_slice(self.next_index_map[&server])
                     } else {
                         vec![]
                     },
