@@ -2,6 +2,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
+use std::hash::Hash;
 use std::io::Write;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -46,8 +47,8 @@ impl DataStore {
             kv_store: BTreeMap::new(),
             committed_transactions: Vec::new(),
             log: Vec::new(),
-            locks: todo!(),
-            pending_transactions: todo!(),
+            locks: HashMap::new(),
+            pending_transactions: HashMap::new(),
         }
     }
 

@@ -72,6 +72,8 @@ pub enum LocalPayload {
     HandlePrepare { transaction_id: u64, from: u64, to: u64, amount: i64 },
     HandleCommit { transaction_id: u64 },
     HandleAbort { transaction_id: u64 },
+
+    Start2PC { transaction_id: u64, from: u64, to: u64, amount: i64 },
 }
 
 pub enum Event {

@@ -28,7 +28,8 @@ fn main() {
         println!("1. Print Balance");
         println!("2. Print Datastore");
         println!("3. Transfer");
-        println!("4. Exit");
+        println!("4. Performance");
+        println!("5. Exit");
 
         let mut choice = String::new();
         io::stdin().read_line(&mut choice).unwrap();
@@ -100,10 +101,17 @@ fn main() {
                 }
             }
             "4" => {
+                sender
+                    .send(Event::Local(LocalEvent {
+                        payload: LocalPayload::Start2PC { transaction_id: 0, from: 0, to: 0, amount: 0 }, // Dummy values to trigger performance
+                    }))
+                    .expect("Failed to send performance event");
+            }
+            "5" => {
                 println!("Exiting...");
                 break;
             }
-            _ => println!("Invalid choice. Please select a number between 1 and 4."),
+            _ => println!("Invalid choice. Please select a number between 1 and 5."),
         }
     }
 }
@@ -112,16 +120,15 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
     let from_cluster = DataStore::get_random_instance_from_id(from);
     let to_cluster = DataStore::get_random_instance_from_id(to);
 
-    // Prepare all instances for 2PC (for commit/abort later)
     let from_instances = DataStore::get_all_instances_from_id(from);
     let to_instances = DataStore::get_all_instances_from_id(to);
     let mut all_instances = from_instances;
     all_instances.extend(to_instances.iter());
 
-    // Send event to initialize pending_2pc in handle_events
+    // Initialize 2PC state
     sender.send(Event::Local(LocalEvent {
-        payload: LocalPayload::Transfer { from: transaction_id, to: 0, amount: 0 }, // Repurpose Transfer to signal 2PC start
-    })).expect("Failed to signal 2PC start");
+        payload: LocalPayload::Start2PC { transaction_id, from, to, amount },
+    })).expect("Failed to initialize 2PC state");
 
     // Send Prepare messages
     sender.send(Event::Network(NetworkEvent {
@@ -139,8 +146,9 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
 }
 
 fn handle_events(mut network: Network, receiver: Receiver<Event>) {
-    let mut pending_2pc: HashMap<u64, (Vec<u64>, usize, Instant, bool)> = HashMap::new(); // Added 'committed' flag
-    let timeout_duration = Duration::from_secs(5); // 5-second timeout
+    let mut pending_2pc: HashMap<u64, (Vec<u64>, usize, Instant, bool)> = HashMap::new();
+    let mut completed_transactions: Vec<(u64, Duration)> = Vec::new(); // (transaction_id, latency)
+    let timeout_duration = Duration::from_secs(5);
 
     loop {
         match receiver.recv() {
@@ -167,22 +175,37 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                 });
                             }
                             LocalPayload::Transfer { from, to, amount } => {
-                                if to == 0 && amount == 0 { // Special case to initialize 2PC
-                                    let transaction_id = from; // Repurpose 'from' as transaction_id
-                                    let from_id = DataStore::get_random_instance_from_id(transaction_id); // Temporary IDs for cluster lookup
-                                    let to_id = transaction_id + 1000; // Arbitrary offset for testing
-                                    let from_cluster = DataStore::get_all_instances_from_id(from_id);
-                                    let to_cluster = DataStore::get_all_instances_from_id(to_id);
-                                    let mut all_instances = from_cluster;
-                                    all_instances.extend(to_cluster.iter());
-                                    pending_2pc.insert(transaction_id, (all_instances, 0, Instant::now(), false));
-                                    println!("Initialized 2PC state for transaction {}", transaction_id);
-                                } else if from / 1000 == to / 1000 {
+                                if from / 1000 == to / 1000 {
                                     network.send_message(NetworkEvent {
                                         from: CLIENT_INSTANCE_ID,
                                         to: DataStore::get_random_instance_from_id(from),
                                         payload: NetworkPayload::Transfer { from, to, amount }.serialize(),
                                     });
+                                }
+                            }
+                            LocalPayload::Start2PC { transaction_id, from, to, amount } => {
+                                if transaction_id == 0 && from == 0 && to == 0 && amount == 0 {
+                                    // Performance request
+                                    let transaction_count = completed_transactions.len() as f64;
+                                    if transaction_count == 0.0 {
+                                        println!("No transactions completed yet.");
+                                        continue;
+                                    }
+                                    let total_time: Duration = completed_transactions.iter().map(|&(_, t)| t).sum();
+                                    let avg_latency = total_time.as_secs_f64() / transaction_count;
+                                    let throughput = transaction_count / total_time.as_secs_f64();
+                                    println!("Performance Metrics:");
+                                    println!("Completed Transactions: {}", transaction_count as u64);
+                                    println!("Average Latency: {:.3} seconds", avg_latency);
+                                    println!("Throughput: {:.3} transactions/second", throughput);
+                                } else {
+                                    // Initialize 2PC
+                                    let from_instances = DataStore::get_all_instances_from_id(from);
+                                    let to_instances = DataStore::get_all_instances_from_id(to);
+                                    let mut all_instances = from_instances;
+                                    all_instances.extend(to_instances.iter());
+                                    pending_2pc.insert(transaction_id, (all_instances, 0, Instant::now(), false));
+                                    println!("Initialized 2PC state for transaction {}", transaction_id);
                                 }
                             }
                             _ => {}
@@ -196,7 +219,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                             NetworkPayload::PrepareResponse { transaction_id, success } => {
                                 if let Some((instances, acks, start_time, committed)) = pending_2pc.get_mut(&transaction_id) {
                                     if *committed {
-                                        continue; // Already processed
+                                        continue;
                                     }
                                     if success {
                                         *acks += 1;
@@ -210,8 +233,8 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                                     payload: NetworkPayload::Commit { transaction_id }.serialize(),
                                                 });
                                             }
-                                            *committed = true; // Mark as committed
-                                            *acks = 0; // Reset for Ack counting
+                                            *committed = true;
+                                            *acks = 0;
                                         }
                                     } else {
                                         println!("Cluster failed to prepare for transaction {}, aborting", transaction_id);
@@ -227,14 +250,16 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                 }
                             }
                             NetworkPayload::Ack { transaction_id, success } => {
-                                if let Some((instances, acks, _, committed)) = pending_2pc.get_mut(&transaction_id) {
+                                if let Some((instances, acks, start_time, committed)) = pending_2pc.get_mut(&transaction_id) {
                                     if !*committed {
-                                        continue; // Waiting for prepare phase
+                                        continue;
                                     }
                                     *acks += 1;
                                     println!("Received Ack for transaction {}: {}/{} acks", transaction_id, *acks, instances.len());
                                     if *acks == instances.len() {
-                                        println!("Transaction {} fully completed with success: {}", transaction_id, success);
+                                        let latency = start_time.elapsed();
+                                        println!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
+                                        completed_transactions.push((transaction_id, latency));
                                         pending_2pc.remove(&transaction_id);
                                     }
                                 }
