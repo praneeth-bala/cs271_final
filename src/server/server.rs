@@ -22,8 +22,10 @@ pub struct RaftServer {
     pub leader_id: Option<u64>,
 
     pub votes_received: u64,
-    pub current_term: u64,         
+    pub current_term: u64,
     pub voted_for: Option<u64>,
+
+    pub pending_prepares: HashMap<u64, (u64, usize, Vec<u64>)>, // transaction_id -> (client_id, acks, locked_items)
 }
 
 impl RaftServer {
@@ -52,6 +54,7 @@ impl RaftServer {
             leader_id: None,
             current_term: 0,
             voted_for: None,
+            pending_prepares: HashMap::new(),
         }
     }
 
@@ -100,7 +103,12 @@ impl RaftServer {
         self.votes_received = 0;
     }
 
-    pub fn handle_request_vote(&mut self, request: NetworkPayload, from: u64, network: &mut Network) {
+    pub fn handle_request_vote(
+        &mut self,
+        request: NetworkPayload,
+        from: u64,
+        network: &mut Network,
+    ) {
         match request {
             NetworkPayload::RequestVote {
                 term,
@@ -174,40 +182,44 @@ impl RaftServer {
     pub fn handle_vote_response(&mut self, request: NetworkPayload) {
         match request {
             NetworkPayload::VoteResponse { term, vote_granted } => {
-                if *self.role.lock().unwrap() == ServerRole::Candidate
-                        && term == self.current_term
-                    {
-                        if vote_granted {
-                            self.votes_received += 1;
-                            let majority = ((self.cluster_servers.len() + 1) / 2) as u64; // +1 for self
-                            println!(
-                                "Server {} has {} votes, needs {} for majority",
-                                self.instance_id,
-                                self.votes_received,
-                                majority
-                            );
-                            if self.votes_received >= majority {
-                                self.become_leader();
-                                self.leader_id = Some(self.instance_id);
-                                // Set next index of all followers to the end of the log
-                                for server in &self.cluster_servers {
-                                    self.next_index_map.insert(*server, self.datastore.log.len());
-                                    self.commit_index_map.insert(*server, 0);
-                                }
-                                self.commit_index_map.insert(self.instance_id, self.datastore.log.len());
+                if *self.role.lock().unwrap() == ServerRole::Candidate && term == self.current_term
+                {
+                    if vote_granted {
+                        self.votes_received += 1;
+                        let majority = ((self.cluster_servers.len() + 1) / 2) as u64; // +1 for self
+                        println!(
+                            "Server {} has {} votes, needs {} for majority",
+                            self.instance_id, self.votes_received, majority
+                        );
+                        if self.votes_received >= majority {
+                            self.become_leader();
+                            self.leader_id = Some(self.instance_id);
+                            // Set next index of all followers to the end of the log
+                            for server in &self.cluster_servers {
+                                self.next_index_map
+                                    .insert(*server, self.datastore.log.len());
+                                self.commit_index_map.insert(*server, 0);
                             }
+                            self.commit_index_map
+                                .insert(self.instance_id, self.datastore.log.len());
                         }
-                    } else if term > self.current_term {
-                        println!("Server {} updating term to {} and stepping down due to higher term in VoteResponse", self.instance_id, term);
-                        self.current_term = term;
-                        self.step_down();
                     }
+                } else if term > self.current_term {
+                    println!("Server {} updating term to {} and stepping down due to higher term in VoteResponse", self.instance_id, term);
+                    self.current_term = term;
+                    self.step_down();
+                }
             }
             _ => unreachable!("Unexpected payload type for VoteResponse"),
         }
     }
 
-    pub fn handle_append_entries(&mut self, request: NetworkPayload, from: u64, network: &mut Network) {
+    pub fn handle_append_entries(
+        &mut self,
+        request: NetworkPayload,
+        from: u64,
+        network: &mut Network,
+    ) {
         match request {
             NetworkPayload::AppendEntries {
                 term,
@@ -248,8 +260,8 @@ impl RaftServer {
                 self.leader_id = Some(leader_id);
 
                 if !self
-                        .datastore
-                        .log_is_consistent(&prev_log_index, &prev_log_term)
+                    .datastore
+                    .log_is_consistent(&prev_log_index, &prev_log_term)
                 {
                     println!("Server {} rejecting AppendEntries from {}: log inconsistency prev_index:{}, term:{}", self.instance_id, leader_id, prev_log_index.unwrap_or(1337), prev_log_term.unwrap_or(1337));
                     network.send_message(NetworkEvent {
@@ -266,7 +278,11 @@ impl RaftServer {
                 }
 
                 // Append new entries
-                let mut start_index = if prev_log_index.is_some() {prev_log_index.unwrap() as usize + 1} else {0};
+                let mut start_index = if prev_log_index.is_some() {
+                    prev_log_index.unwrap() as usize + 1
+                } else {
+                    0
+                };
                 for entry in &entries {
                     println!(
                         "Server {} appending log entry at index {} in term {}",
@@ -303,12 +319,19 @@ impl RaftServer {
         }
     }
 
-    pub fn handle_append_entries_response(&mut self, request: NetworkPayload, from: u64, network: &mut Network) {
+    pub fn handle_append_entries_response(
+        &mut self,
+        request: NetworkPayload,
+        from: u64,
+        network: &mut Network,
+    ) {
         match request {
-            NetworkPayload::AppendEntriesResponse { term, success, next_index } => {
-                if *self.role.lock().unwrap() == ServerRole::Leader
-                    && term == self.current_term
-                {
+            NetworkPayload::AppendEntriesResponse {
+                term,
+                success,
+                next_index,
+            } => {
+                if *self.role.lock().unwrap() == ServerRole::Leader && term == self.current_term {
                     if success {
                         println!(
                             "Server {} confirmed log replication success from {}",
@@ -316,16 +339,54 @@ impl RaftServer {
                         );
                         self.next_index_map.insert(from, next_index);
                         self.commit_index_map.insert(from, next_index);
-                        self.datastore.calculate_latest_commit(&self.commit_index_map, self.current_term);
+                        self.datastore
+                            .calculate_latest_commit(&self.commit_index_map, self.current_term);
+
+                        // Check pending prepares
+                        let mut to_remove = Vec::new();
+                        for (&transaction_id, (client_id, acks, _)) in
+                            self.pending_prepares.iter_mut()
+                        {
+                            if next_index > self.datastore.log.len() - 1 {
+                                *acks += 1;
+                                let majority = (self.cluster_servers.len() + 1) / 2; // Including self
+                                if *acks >= majority {
+                                    println!(
+                                        "Server {} achieved consensus for transaction {} (acks: {}/{})",
+                                        self.instance_id, transaction_id, *acks, majority
+                                    );
+                                    network.send_message(NetworkEvent {
+                                        from: self.instance_id,
+                                        to: *client_id,
+                                        payload: NetworkPayload::PrepareResponse {
+                                            transaction_id,
+                                            success: true,
+                                        }
+                                        .serialize(),
+                                    });
+                                    to_remove.push(transaction_id);
+                                }
+                            }
+                        }
+                        // Clean up completed prepares
+                        for tid in to_remove {
+                            self.pending_prepares.remove(&tid);
+                        }
                     } else if term > self.current_term {
-                        println!("Server {} updating term to {} and stepping down due to higher term in AppendEntriesResponse", self.instance_id, term);
+                        println!(
+                            "Server {} updating term to {} and stepping down due to higher term",
+                            self.instance_id, term
+                        );
                         self.current_term = term;
                         self.step_down();
                         self.leader_id = Some(from);
                     } else {
-                        println!("Server {} detected log inconsistency with follower {}", self.instance_id, from);
-                        // Decrement nextIndex and retry
-                        self.next_index_map.insert(from, self.next_index_map[&from] - 1);
+                        println!(
+                            "Server {} detected log inconsistency with follower {}",
+                            self.instance_id, from
+                        );
+                        self.next_index_map
+                            .insert(from, self.next_index_map[&from] - 1);
                         self.replicate_log(network, Some(from));
                     }
                 }
@@ -334,14 +395,22 @@ impl RaftServer {
         }
     }
 
-    pub fn handle_transfer(&mut self, request: NetworkPayload, from_instance: u64, network: &mut Network) {
+    pub fn handle_transfer(
+        &mut self,
+        request: NetworkPayload,
+        from_instance: u64,
+        network: &mut Network,
+    ) {
         match request {
             NetworkPayload::Transfer { from, to, amount } => {
                 // For intra-shard, initiate Raft consensus
                 if from / 1000 == to / 1000 {
-
                     if *self.role.lock().unwrap() != ServerRole::Leader {
-                        println!("Server {} not leader, redirecting to {}", self.instance_id, self.leader_id.unwrap());
+                        println!(
+                            "Server {} not leader, redirecting to {}",
+                            self.instance_id,
+                            self.leader_id.unwrap()
+                        );
                         network.send_message(NetworkEvent {
                             from: from_instance,
                             to: self.leader_id.unwrap(),
@@ -363,16 +432,20 @@ impl RaftServer {
                     };
                     println!(
                         "Server {} appending log entry for transfer in term {}",
-                        self.instance_id,
-                        self.current_term
+                        self.instance_id, self.current_term
                     );
                     self.datastore.append_log(log_entry);
-                    self.next_index_map.insert(self.instance_id, self.datastore.log.len());
-                    self.commit_index_map.insert(self.instance_id, self.datastore.log.len());
+                    self.next_index_map
+                        .insert(self.instance_id, self.datastore.log.len());
+                    self.commit_index_map
+                        .insert(self.instance_id, self.datastore.log.len());
                     self.replicate_log(network, None);
                 } else {
                     // Cross-shard, handle with 2PC (to be implemented later)
-                    println!("Server {} detected cross-shard transaction, to be handled with 2PC", self.instance_id);
+                    println!(
+                        "Server {} detected cross-shard transaction, to be handled with 2PC",
+                        self.instance_id
+                    );
                     todo!("Implement 2PC for cross-shard transactions");
                 }
             }
@@ -420,13 +493,23 @@ impl RaftServer {
                         if last_log.unwrap().index == 0 {
                             None
                         } else {
-                            Some(self.datastore.log_entry((last_log.unwrap().index - 1) as usize).unwrap().term)
+                            Some(
+                                self.datastore
+                                    .log_entry((last_log.unwrap().index - 1) as usize)
+                                    .unwrap()
+                                    .term,
+                            )
                         }
                     } else {
                         if self.next_index_map[&server] == 0 {
                             None
                         } else {
-                            Some(self.datastore.log_entry(self.next_index_map[&server] - 1).unwrap().term)
+                            Some(
+                                self.datastore
+                                    .log_entry(self.next_index_map[&server] - 1)
+                                    .unwrap()
+                                    .term,
+                            )
                         }
                     },
                     entries: if last_log.is_some() {
@@ -434,7 +517,11 @@ impl RaftServer {
                     } else {
                         vec![]
                     },
-                    leader_commit: if self.datastore.committed_transactions.len() > 0 { Some(self.datastore.committed_transactions.len()-1) } else { None },
+                    leader_commit: if self.datastore.committed_transactions.len() > 0 {
+                        Some(self.datastore.committed_transactions.len() - 1)
+                    } else {
+                        None
+                    },
                 };
                 network.send_message(NetworkEvent {
                     from: self.instance_id,
@@ -442,6 +529,201 @@ impl RaftServer {
                     payload: request.serialize(),
                 });
             }
+        }
+    }
+
+    pub fn handle_prepare(
+        &mut self,
+        request: NetworkPayload,
+        from_instance: u64,
+        network: &mut Network,
+    ) {
+        match request {
+            NetworkPayload::Prepare {
+                transaction_id,
+                from,
+                to,
+                amount,
+            } => {
+                if *self.role.lock().unwrap() != ServerRole::Leader {
+                    println!(
+                        "Server {} not leader, redirecting Prepare to {}",
+                        self.instance_id,
+                        self.leader_id.unwrap_or(0)
+                    );
+                    network.send_message(NetworkEvent {
+                        from: from_instance, // Client ID
+                        to: self.leader_id.unwrap_or(0),
+                        payload: request.serialize(),
+                    });
+                    return;
+                }
+
+                // Determine shard responsibility and lock items
+                let shard_start = ((self.instance_id - 1) / 3) * 1000 + 1;
+                let shard_end = shard_start + 999;
+                let mut locked_items = Vec::new();
+                let mut sufficient_funds = true;
+
+                if from >= shard_start && from <= shard_end {
+                    locked_items.push(from);
+                    if let Some(balance) = self.datastore.kv_store.get(&from) {
+                        sufficient_funds = *balance >= amount;
+                    } else {
+                        sufficient_funds = false;
+                    }
+                }
+                if to >= shard_start && to <= shard_end {
+                    locked_items.push(to);
+                }
+
+                // Check funds and locks
+                if !sufficient_funds
+                    || !self
+                        .datastore
+                        .acquire_locks(transaction_id, locked_items.clone())
+                {
+                    println!(
+                        "Server {} aborting Prepare for transaction {}: insufficient funds or locks unavailable",
+                        self.instance_id, transaction_id
+                    );
+                    network.send_message(NetworkEvent {
+                        from: self.instance_id,
+                        to: from_instance,
+                        payload: NetworkPayload::PrepareResponse {
+                            transaction_id,
+                            success: false,
+                        }
+                        .serialize(),
+                    });
+                    self.datastore.release_locks(transaction_id); // Clean up locks if acquired
+                    return;
+                }
+
+                // Add to pending transactions
+                self.datastore.add_pending_transaction(
+                    transaction_id,
+                    from,
+                    to,
+                    amount,
+                    locked_items.clone(),
+                );
+
+                // Log the transaction for Raft consensus
+                let transaction = Transaction {
+                    from,
+                    to,
+                    value: amount,
+                };
+                let log_entry = LogEntry {
+                    term: self.current_term,
+                    index: self.datastore.log.len(),
+                    command: transaction,
+                };
+                self.datastore.append_log(log_entry);
+                self.next_index_map
+                    .insert(self.instance_id, self.datastore.log.len());
+                self.commit_index_map
+                    .insert(self.instance_id, self.datastore.log.len());
+
+                // Track pending prepare with initial ack count (1 for self)
+                self.pending_prepares
+                    .insert(transaction_id, (from_instance, 1, locked_items));
+
+                // Replicate to followers
+                self.replicate_log(network, None);
+
+                println!(
+                    "Server {} initiated prepare for transaction {}, awaiting consensus",
+                    self.instance_id, transaction_id
+                );
+            }
+            _ => unreachable!("Unexpected payload type for Prepare"),
+        }
+    }
+
+    pub fn handle_commit(&mut self, request: NetworkPayload, from_instance: u64, network: &mut Network) {
+        match request {
+            NetworkPayload::Commit { transaction_id } => {
+                if *self.role.lock().unwrap() != ServerRole::Leader {
+                    println!(
+                        "Server {} not leader, redirecting Commit to {}",
+                        self.instance_id, self.leader_id.unwrap_or(0)
+                    );
+                    network.send_message(NetworkEvent {
+                        from: from_instance,
+                        to: self.leader_id.unwrap_or(0),
+                        payload: request.serialize(),
+                    });
+                    return;
+                }
+
+                // Commit the transaction
+                let success = self.datastore.commit_pending_transaction(transaction_id);
+                if success {
+                    println!("Server {} committed transaction {}", self.instance_id, transaction_id);
+                } else {
+                    println!(
+                        "Server {} failed to commit transaction {} (already committed or invalid)",
+                        self.instance_id, transaction_id
+                    );
+                }
+
+                // Multicast Commit to followers (simplified 2PC per project)
+                for &server in &self.cluster_servers {
+                    if server != self.instance_id {
+                        network.send_message(NetworkEvent {
+                            from: self.instance_id,
+                            to: server,
+                            payload: NetworkPayload::Commit { transaction_id }.serialize(),
+                        });
+                    }
+                }
+
+                // Send Ack back to client
+                // Note: Project mentions Ack, but we don’t have an Ack payload yet; we’ll add it in client step if needed
+                println!("Server {} sent commit confirmation for transaction {}", self.instance_id, transaction_id);
+            }
+            _ => unreachable!("Unexpected payload type for Commit"),
+        }
+    }
+
+    pub fn handle_abort(&mut self, request: NetworkPayload, from_instance: u64, network: &mut Network) {
+        match request {
+            NetworkPayload::Abort { transaction_id } => {
+                if *self.role.lock().unwrap() != ServerRole::Leader {
+                    println!(
+                        "Server {} not leader, redirecting Abort to {}",
+                        self.instance_id, self.leader_id.unwrap_or(0)
+                    );
+                    network.send_message(NetworkEvent {
+                        from: from_instance,
+                        to: self.leader_id.unwrap_or(0),
+                        payload: request.serialize(),
+                    });
+                    return;
+                }
+
+                // Abort the transaction
+                self.datastore.abort_pending_transaction(transaction_id);
+                self.pending_prepares.remove(&transaction_id); // Clean up if still pending
+                println!("Server {} aborted transaction {}", self.instance_id, transaction_id);
+
+                // Multicast Abort to followers
+                for &server in &self.cluster_servers {
+                    if server != self.instance_id {
+                        network.send_message(NetworkEvent {
+                            from: self.instance_id,
+                            to: server,
+                            payload: NetworkPayload::Abort { transaction_id }.serialize(),
+                        });
+                    }
+                }
+
+                // Send Ack back to client (placeholder)
+                println!("Server {} sent abort confirmation for transaction {}", self.instance_id, transaction_id);
+            }
+            _ => unreachable!("Unexpected payload type for Abort"),
         }
     }
 }

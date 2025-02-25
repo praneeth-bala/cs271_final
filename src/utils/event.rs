@@ -39,6 +39,11 @@ pub enum NetworkPayload {
         success: bool,                // True if follower contained matching entries
         next_index: usize,    // Latest index of the follower
     },
+
+    Prepare { transaction_id: u64, from: u64, to: u64, amount: i64 },        
+    PrepareResponse { transaction_id: u64, success: bool },                
+    Commit { transaction_id: u64 },                                         
+    Abort { transaction_id: u64 },                                          
 }
 
 impl NetworkPayload {
@@ -62,6 +67,10 @@ pub enum LocalPayload {
 
     SendHeartbeat,
     StartElection,
+
+    HandlePrepare { transaction_id: u64, from: u64, to: u64, amount: i64 },
+    HandleCommit { transaction_id: u64 },
+    HandleAbort { transaction_id: u64 },
 }
 
 pub enum Event {

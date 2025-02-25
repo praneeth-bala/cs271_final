@@ -41,8 +41,9 @@ fn main() {
     let role_clone = Arc::clone(&raft_server.role);
     let sender_clone = sender.clone();
     thread::spawn(move || {
-        let election_timeout =
-            Duration::from_millis(3*HEARTBEAT_TIMEOUT + rand::random::<u64>() % HEARTBEAT_TIMEOUT); // Random timeout between 3T & 4Ts
+        let election_timeout = Duration::from_millis(
+            3 * HEARTBEAT_TIMEOUT + rand::random::<u64>() % HEARTBEAT_TIMEOUT,
+        ); // Random timeout between 3T & 4Ts
         loop {
             thread::sleep(Duration::from_millis(HEARTBEAT_TIMEOUT));
             let mut locked_ping = last_ping_clone.lock().unwrap();
@@ -89,7 +90,12 @@ fn main() {
     io::stdin().read_line(&mut input).unwrap();
 }
 
-fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_server: RaftServer, last_ping: Arc<Mutex<std::time::Instant>>) {
+fn handle_events(
+    mut network: Network,
+    receiver: Receiver<Event>,
+    mut raft_server: RaftServer,
+    last_ping: Arc<Mutex<std::time::Instant>>,
+) {
     loop {
         match receiver.recv() {
             Ok(event) => {
@@ -149,9 +155,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                             }
                             NetworkPayload::VoteResponse { term, vote_granted } => {
                                 println!("Server {} received VoteResponse from {} in term {}, vote_granted: {}", raft_server.instance_id, message.from, term, vote_granted);
-                                raft_server.handle_vote_response(
-                                    payload
-                                );
+                                raft_server.handle_vote_response(payload);
                             }
                             NetworkPayload::AppendEntries { .. } => {
                                 println!(
@@ -159,7 +163,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                                     raft_server.instance_id, message.from
                                 );
                                 *last_ping.lock().unwrap() = std::time::Instant::now();
-                                
+
                                 raft_server.handle_append_entries(
                                     payload,
                                     message.from,
@@ -171,8 +175,33 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, mut raft_serve
                                 raft_server.handle_append_entries_response(
                                     payload,
                                     message.from,
-                                    &mut network
+                                    &mut network,
                                 );
+                            }
+                            NetworkPayload::Prepare { .. } => {
+                                println!(
+                                    "Server {} received Prepare from {}",
+                                    raft_server.instance_id, message.from
+                                );
+                                raft_server.handle_prepare(payload, message.from, &mut network);
+                            }
+                            NetworkPayload::PrepareResponse {
+                                transaction_id,
+                                success,
+                            } => todo!(),
+                            NetworkPayload::Commit { .. } => {
+                                println!(
+                                    "Server {} received Commit from {}",
+                                    raft_server.instance_id, message.from
+                                );
+                                raft_server.handle_commit(payload, message.from, &mut network);
+                            }
+                            NetworkPayload::Abort { .. } => {
+                                println!(
+                                    "Server {} received Abort from {}",
+                                    raft_server.instance_id, message.from
+                                );
+                                raft_server.handle_abort(payload, message.from, &mut network);
                             }
                         }
                     }
