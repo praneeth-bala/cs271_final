@@ -658,7 +658,6 @@ impl RaftServer {
                     return;
                 }
 
-                // Commit the transaction
                 let success = self.datastore.commit_pending_transaction(transaction_id);
                 if success {
                     println!("Server {} committed transaction {}", self.instance_id, transaction_id);
@@ -669,7 +668,6 @@ impl RaftServer {
                     );
                 }
 
-                // Multicast Commit to followers (simplified 2PC per project)
                 for &server in &self.cluster_servers {
                     if server != self.instance_id {
                         network.send_message(NetworkEvent {
@@ -680,9 +678,11 @@ impl RaftServer {
                     }
                 }
 
-                // Send Ack back to client
-                // Note: Project mentions Ack, but we don’t have an Ack payload yet; we’ll add it in client step if needed
-                println!("Server {} sent commit confirmation for transaction {}", self.instance_id, transaction_id);
+                network.send_message(NetworkEvent {
+                    from: self.instance_id,
+                    to: from_instance,
+                    payload: NetworkPayload::Ack { transaction_id, success }.serialize(),
+                });
             }
             _ => unreachable!("Unexpected payload type for Commit"),
         }
@@ -704,12 +704,10 @@ impl RaftServer {
                     return;
                 }
 
-                // Abort the transaction
                 self.datastore.abort_pending_transaction(transaction_id);
-                self.pending_prepares.remove(&transaction_id); // Clean up if still pending
+                self.pending_prepares.remove(&transaction_id);
                 println!("Server {} aborted transaction {}", self.instance_id, transaction_id);
 
-                // Multicast Abort to followers
                 for &server in &self.cluster_servers {
                     if server != self.instance_id {
                         network.send_message(NetworkEvent {
@@ -720,8 +718,11 @@ impl RaftServer {
                     }
                 }
 
-                // Send Ack back to client (placeholder)
-                println!("Server {} sent abort confirmation for transaction {}", self.instance_id, transaction_id);
+                network.send_message(NetworkEvent {
+                    from: self.instance_id,
+                    to: from_instance,
+                    payload: NetworkPayload::Ack { transaction_id, success: true }.serialize(),
+                });
             }
             _ => unreachable!("Unexpected payload type for Abort"),
         }

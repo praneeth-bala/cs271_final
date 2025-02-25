@@ -203,6 +203,16 @@ fn handle_events(
                                 );
                                 raft_server.handle_abort(payload, message.from, &mut network);
                             }
+                            NetworkPayload::Ack {
+                                transaction_id,
+                                success,
+                            } => {
+                                println!(
+                                    "Server {} received Ack for transaction {} with success: {}",
+                                    raft_server.instance_id, transaction_id, success
+                                );
+                                // Followers don’t need to act on Ack; it’s for the client
+                            }
                         }
                     }
                 }

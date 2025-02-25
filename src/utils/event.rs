@@ -43,7 +43,8 @@ pub enum NetworkPayload {
     Prepare { transaction_id: u64, from: u64, to: u64, amount: i64 },        
     PrepareResponse { transaction_id: u64, success: bool },                
     Commit { transaction_id: u64 },                                         
-    Abort { transaction_id: u64 },                                          
+    Abort { transaction_id: u64 },
+    Ack { transaction_id: u64, success: bool },                                          
 }
 
 impl NetworkPayload {
