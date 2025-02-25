@@ -188,14 +188,14 @@ impl DataStore {
         let mut indexes: Vec<usize> = next_index.values().cloned().collect();
         indexes.sort();
         let commit_index = indexes[indexes.len() / 2];
-        if commit_index >= self.log.len() {
+        if commit_index > self.log.len() {
             return;
         }
         println!(
             "Server {} applying committed entries up to index {}",
             self.instance_id, commit_index
         );
-        for i in self.committed_transactions.len()..commit_index + 1 {
+        for i in self.committed_transactions.len()..commit_index {
             if let Some(entry) = self.log.get(i) {
                 if self.kv_store.contains_key(&entry.command.from) && self.kv_store.contains_key(&entry.command.to) {
                     self.process_transfer(entry.command.from, entry.command.to, entry.command.value);

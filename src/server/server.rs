@@ -360,6 +360,7 @@ impl RaftServer {
                         self.current_term
                     );
                     self.datastore.append_log(log_entry);
+                    self.next_index.insert(self.instance_id, self.datastore.log.len());
                     self.replicate_log(network, false, None);
                 } else {
                     // Cross-shard, handle with 2PC (to be implemented later)
