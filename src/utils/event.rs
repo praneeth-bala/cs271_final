@@ -119,6 +119,8 @@ pub enum LocalPayload {
         to: u64,
         amount: i64,
     },
+
+    PrepareCluster { transaction_id: u64, target: u64, from: u64, to: u64, amount: i64 },
 }
 
 pub enum Event {

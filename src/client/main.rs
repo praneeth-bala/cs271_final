@@ -111,7 +111,7 @@ fn main() {
                             from: 0,
                             to: 0,
                             amount: 0,
-                        }, // Dummy values to trigger performance
+                        },
                     }))
                     .expect("Failed to send performance event");
             }
@@ -144,48 +144,40 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
         }))
         .expect("Failed to initialize 2PC state");
 
-    let prepare_from = NetworkEvent {
-        from: CLIENT_INSTANCE_ID,
-        to: from_cluster,
-        payload: NetworkPayload::Prepare {
-            transaction_id,
-            from,
-            to,
-            amount,
-        }
-        .serialize(),
-    };
-    let prepare_to = NetworkEvent {
-        from: CLIENT_INSTANCE_ID,
-        to: to_cluster,
-        payload: NetworkPayload::Prepare {
-            transaction_id,
-            from,
-            to,
-            amount,
-        }
-        .serialize(),
-    };
-    println!(
-        "Sending Prepare to server {} for transaction {}",
-        from_cluster, transaction_id
-    );
+    // Send Prepare as local events, to be converted to network events in handle_events
     sender
-        .send(Event::Network(prepare_from))
+        .send(Event::Local(LocalEvent {
+            payload: LocalPayload::PrepareCluster {
+                transaction_id,
+                target: from_cluster,
+                from,
+                to,
+                amount,
+            },
+        }))
         .expect("Failed to send Prepare to from cluster");
-    println!(
-        "Sending Prepare to server {} for transaction {}",
-        to_cluster, transaction_id
-    );
     sender
-        .send(Event::Network(prepare_to))
+        .send(Event::Local(LocalEvent {
+            payload: LocalPayload::PrepareCluster {
+                transaction_id,
+                target: to_cluster,
+                from,
+                to,
+                amount,
+            },
+        }))
         .expect("Failed to send Prepare to to cluster");
+
+    println!(
+        "Sent Prepare messages for transaction {} to servers {} and {}",
+        transaction_id, from_cluster, to_cluster
+    );
 }
 
 fn handle_events(mut network: Network, receiver: Receiver<Event>) {
     let mut pending_2pc: HashMap<u64, (Vec<u64>, usize, Instant, bool)> = HashMap::new();
     let mut completed_transactions: Vec<(u64, Duration)> = Vec::new();
-    let timeout_duration = Duration::from_secs(15); // Increased to 15s for Raft consensus
+    let timeout_duration = Duration::from_secs(5);
 
     loop {
         match receiver.recv() {
@@ -259,6 +251,29 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     );
                                 }
                             }
+                            LocalPayload::PrepareCluster {
+                                transaction_id,
+                                target,
+                                from,
+                                to,
+                                amount,
+                            } => {
+                                println!(
+                                    "Sending Prepare to server {} for transaction {}",
+                                    target, transaction_id
+                                );
+                                network.send_message(NetworkEvent {
+                                    from: CLIENT_INSTANCE_ID,
+                                    to: target,
+                                    payload: NetworkPayload::Prepare {
+                                        transaction_id,
+                                        from,
+                                        to,
+                                        amount,
+                                    }
+                                    .serialize(),
+                                });
+                            }
                             _ => {}
                         }
                     }
@@ -280,10 +295,6 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             pending_2pc.get_mut(&transaction_id)
                                         {
                                             if *committed {
-                                                println!(
-                                                    "Transaction {} already committed, ignoring",
-                                                    transaction_id
-                                                );
                                                 continue;
                                             }
                                             if success {
@@ -340,7 +351,6 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             pending_2pc.get_mut(&transaction_id)
                                         {
                                             if !*committed {
-                                                println!("Transaction {} not yet committed, ignoring Ack", transaction_id);
                                                 continue;
                                             }
                                             *acks += 1;
