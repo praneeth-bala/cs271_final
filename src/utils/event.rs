@@ -99,6 +99,7 @@ pub enum LocalPayload {
 
     SendHeartbeat,
     StartElection,
+    CheckAbort,
 
     HandlePrepare {
         transaction_id: u64,

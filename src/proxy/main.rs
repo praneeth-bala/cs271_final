@@ -3,7 +3,7 @@ use cs271_final::utils::event::Event;
 use cs271_final::utils::network::Network;
 
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::{thread,io};
+use std::{thread, time::Duration};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::fs;
@@ -23,11 +23,9 @@ fn main() {
     });
     println!("Proxy started!");
 
-    // Just update config for any input
-    let mut input = String::new();
     loop {
-        io::stdin().read_line(&mut input).unwrap();
         update_config(&config_map, "config.txt");
+        thread::sleep(Duration::from_millis(5000));
     }
 }
 

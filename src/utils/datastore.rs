@@ -1,24 +1,19 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{self, OpenOptions};
-use std::hash::Hash;
+use std::fs::OpenOptions;
 use std::io::Write;
+use std::fs;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Transaction {
     pub from: u64,
     pub to: u64,
     pub value: i64,
-}
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PendingTransaction {
-    pub transaction_id: u64,
-    pub from: u64,
-    pub to: u64,
-    pub amount: i64,
-    pub locked_items: Vec<u64>,
+    // Cross shard stuff
+    pub twopc_prepare: bool,
+    pub twopc_transaction_id: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -26,11 +21,13 @@ pub struct DataStore {
     pub instance_id: u64,
     pub kv_store: BTreeMap<u64, i64>,
     pub committed_transactions: Vec<Transaction>,
-
     pub log: Vec<LogEntry>,
 
-    pub locks: HashMap<u64, u64>, // Key: item_id, Value: transaction_id holding the lock
-    pub pending_transactions: HashMap<u64, PendingTransaction>, // Key: transaction_id, Value: transaction details
+    // Meant to be used only by leader
+    // Key: Transaction ID, Value: Index in log
+    pub pending_transactions: HashMap<u64, usize>
+
+    // pub locks: HashMap<u64, u64>, // Key: item_id, Value: 0,1
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -47,8 +44,8 @@ impl DataStore {
             kv_store: BTreeMap::new(),
             committed_transactions: Vec::new(),
             log: Vec::new(),
-            locks: HashMap::new(),
             pending_transactions: HashMap::new(),
+            // locks: HashMap::new(),
         }
     }
 
@@ -102,9 +99,10 @@ impl DataStore {
         }
     }
 
-    pub fn record_transaction(&mut self, from: u64, to: u64, value: i64) {
+    pub fn record_transaction(&mut self, from: u64, to: u64, value: i64, twopc_prepare: bool, twopc_transaction_id: u64) {
         self.committed_transactions
-            .push(Transaction { from, to, value });
+            .push(Transaction { from, to, value, twopc_prepare, twopc_transaction_id });
+        self.save_to_file();
     }
 
     pub fn print_value(&self, id: u64) {
@@ -143,22 +141,66 @@ impl DataStore {
         }
     }
 
-    pub fn process_transfer(&mut self, from: u64, to: u64, amount: i64) -> bool {
-        if let Some(balance) = self.kv_store.get_mut(&from) {
-            if *balance >= amount {
-                *balance -= amount;
-                *self.kv_store.entry(to).or_insert(0) += amount;
-                self.record_transaction(from, to, amount);
+    pub fn process_transfer(&mut self, from: u64, to: u64, amount: i64, twopc_prepare: bool, twopc_transaction_id: u64) -> bool {
+        // if self.locks.contains_key(&from) || self.locks.contains_key(&to) {
+        //     println!("Transaction failed: locked!");
+        //     panic!();
+        //     return false;
+        // }
+
+        if self.kv_store.contains_key(&from) && self.kv_store.contains_key(&to) {
+            // Intra
+            let balance_from = self.kv_store.get_mut(&from).unwrap();
+            if *balance_from >= amount {
+                *balance_from -= amount;
+                let balance_to = self.kv_store.get_mut(&to).unwrap();
+                *balance_to += amount;
+                self.record_transaction(from, to, amount, twopc_prepare, twopc_transaction_id);
                 println!(
-                    "Transaction successful: {} -> {} ({} units)",
-                    from, to, amount
+                    "Transaction successful: {} -> {} ({} units) TWOPC prepare? {}",
+                    from, to, amount, twopc_prepare
                 );
-                self.save_to_file();
+                return true;
+            } else {
+                println!("Transaction failed: insufficient funds or invalid account.");
+                panic!();
+            }
+        } else {
+            // Inter
+            if self.kv_store.contains_key(&from) {
+                // If from component is with us
+                let balance = self.kv_store.get_mut(&from).unwrap();
+                if *balance >= amount {
+                    // Update balance only after commit (not prepare log)
+                    if !twopc_prepare {
+                        *balance -= amount;
+                    }
+                    self.record_transaction(from, to, amount, twopc_prepare, twopc_transaction_id);
+                    println!(
+                        "Transaction successful: {} -> {} ({} units) TWOPC prepare? {}",
+                        from, to, amount, twopc_prepare
+                    );
+                    return true;
+                } else {
+                    // Ideally we should never reach here
+                    println!("Transaction failed: insufficient funds or invalid account.");
+                    panic!()
+                }
+            } else {
+                // If to component is with us
+                let balance = self.kv_store.get_mut(&to).unwrap();
+                // Update balance only after commit (not prepare log)
+                if !twopc_prepare {
+                    *balance += amount;
+                }
+                self.record_transaction(from, to, amount, twopc_prepare, twopc_transaction_id);
+                println!(
+                    "Transaction successful: {} -> {} ({} units) TWOPC prepare? {}",
+                    from, to, amount, twopc_prepare
+                );
                 return true;
             }
         }
-        println!("Transaction failed: insufficient funds or invalid account.");
-        false
     }
 
     // Helper to append an entry to the log
@@ -222,15 +264,13 @@ impl DataStore {
         );
         for i in self.committed_transactions.len()..commit_index {
             if let Some(entry) = self.log.get(i) {
-                if self.kv_store.contains_key(&entry.command.from)
-                    && self.kv_store.contains_key(&entry.command.to)
-                {
-                    self.process_transfer(
-                        entry.command.from,
-                        entry.command.to,
-                        entry.command.value,
-                    );
-                }
+                self.process_transfer(
+                    entry.command.from,
+                    entry.command.to,
+                    entry.command.value,
+                    entry.command.twopc_prepare,
+                    entry.command.twopc_transaction_id,
+                );
             }
         }
     }
@@ -250,75 +290,24 @@ impl DataStore {
         );
         for i in self.committed_transactions.len()..commit_index.unwrap() + 1 {
             if let Some(entry) = self.log.get(i) {
-                if self.kv_store.contains_key(&entry.command.from)
-                    && self.kv_store.contains_key(&entry.command.to)
-                {
-                    self.process_transfer(
-                        entry.command.from,
-                        entry.command.to,
-                        entry.command.value,
-                    );
-                }
-            }
-        }
-    }
-
-    // New method to acquire locks for a transaction
-    pub fn acquire_locks(&mut self, transaction_id: u64, items: Vec<u64>) -> bool {
-        for &item in &items {
-            if self.locks.contains_key(&item) {
-                println!(
-                    "Server {} failed to lock item {}: already locked",
-                    self.instance_id, item
+                self.process_transfer(
+                    entry.command.from,
+                    entry.command.to,
+                    entry.command.value,
+                    entry.command.twopc_prepare,
+                    entry.command.twopc_transaction_id,
                 );
-                return false; // Lock unavailable
             }
         }
-        // All locks available, acquire them
-        for &item in &items {
-            self.locks.insert(item, transaction_id);
-        }
-        println!(
-            "Server {} acquired locks for items {:?} for transaction {}",
-            self.instance_id, items, transaction_id
-        );
-        true
-    }
-
-    // New method to release locks for a transaction
-    pub fn release_locks(&mut self, transaction_id: u64) {
-        let mut locked_items = Vec::new();
-        self.locks.retain(|item, tid| {
-            if *tid == transaction_id {
-                locked_items.push(*item);
-                false // Remove the lock
-            } else {
-                true // Keep the lock
-            }
-        });
-        println!(
-            "Server {} released locks for items {:?} for transaction {}",
-            self.instance_id, locked_items, transaction_id
-        );
     }
 
     // New method to add a pending transaction
     pub fn add_pending_transaction(
         &mut self,
         transaction_id: u64,
-        from: u64,
-        to: u64,
-        amount: i64,
-        locked_items: Vec<u64>,
+        index: usize,
     ) {
-        let pending = PendingTransaction {
-            transaction_id,
-            from,
-            to,
-            amount,
-            locked_items,
-        };
-        self.pending_transactions.insert(transaction_id, pending);
+        self.pending_transactions.insert(transaction_id, index);
         println!(
             "Server {} added pending transaction {}",
             self.instance_id, transaction_id
@@ -326,47 +315,38 @@ impl DataStore {
         self.save_to_file();
     }
 
-    // New method to commit a pending transaction
-    pub fn commit_pending_transaction(&mut self, transaction_id: u64) -> bool {
-        if let Some(pending) = self.pending_transactions.remove(&transaction_id) {
-            if let Some(balance) = self.kv_store.get_mut(&pending.from) {
-                if *balance >= pending.amount {
-                    *balance -= pending.amount;
-                    *self.kv_store.entry(pending.to).or_insert(0) += pending.amount;
-                    self.record_transaction(pending.from, pending.to, pending.amount);
-                    self.release_locks(transaction_id);
-                    println!(
-                        "Server {} committed transaction {}",
-                        self.instance_id, transaction_id
-                    );
-                    self.save_to_file();
-                    return true;
-                }
-            }
-            println!(
-                "Server {} failed to commit transaction {}: insufficient funds",
-                self.instance_id, transaction_id
-            );
-            self.release_locks(transaction_id);
-            self.save_to_file();
-            return false;
-        }
-        println!(
-            "Server {} found no pending transaction {} to commit",
-            self.instance_id, transaction_id
-        );
-        false
-    }
+    // New method to acquire locks for a transaction
+    // pub fn acquire_locks(&mut self, items: Vec<u64>) -> bool {
+    //     for &item in &items {
+    //         if self.locks.contains_key(&item) {
+    //             println!(
+    //                 "Server {} failed to lock item {}: already locked",
+    //                 self.instance_id, item
+    //             );
+    //             return false; // Lock unavailable
+    //         }
+    //     }
+    //     // All locks available, acquire them
+    //     for &item in &items {
+    //         if self.kv_store.contains_key(&item) {
+    //             self.locks.insert(item, 1);
+    //         }
+    //     }
+    //     println!(
+    //         "Server {} acquired locks for items {:?}",
+    //         self.instance_id, items
+    //     );
+    //     true
+    // }
 
-    // New method to abort a pending transaction
-    pub fn abort_pending_transaction(&mut self, transaction_id: u64) {
-        if self.pending_transactions.remove(&transaction_id).is_some() {
-            self.release_locks(transaction_id);
-            println!(
-                "Server {} aborted transaction {}",
-                self.instance_id, transaction_id
-            );
-            self.save_to_file();
-        }
-    }
+    // // New method to release locks for a transaction
+    // pub fn release_locks(&mut self, items: Vec<u64>) {
+    //     for &item in &items {
+    //         self.locks.remove(&item);
+    //     }
+    //     println!(
+    //         "Server {} released locks for items {:?}",
+    //         self.instance_id, items
+    //     );
+    // }
 }

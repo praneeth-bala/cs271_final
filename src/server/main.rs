@@ -20,7 +20,7 @@ fn main() {
     }
 
     // Parse the instance ID from the command-line argument
-    let instance_id: u64 = match args[1].parse() {
+    let instance_id = match args[1].parse() {
         Ok(id) => id,
         Err(_) => {
             eprintln!("Error: Invalid instance ID. Please provide a valid number.");
@@ -36,6 +36,7 @@ fn main() {
     let raft_server = RaftServer::new(instance_id);
 
     let last_ping = Arc::new(Mutex::new(std::time::Instant::now()));
+    
     // Spawn a separate thread for timeout handling
     let last_ping_clone = Arc::clone(&last_ping);
     let role_clone = Arc::clone(&raft_server.role);
@@ -45,18 +46,12 @@ fn main() {
             3 * HEARTBEAT_TIMEOUT + rand::random::<u64>() % HEARTBEAT_TIMEOUT,
         ); // Random timeout between 3T & 4Ts
         loop {
-            thread::sleep(Duration::from_millis(HEARTBEAT_TIMEOUT));
+            thread::sleep(Duration::from_millis(HEARTBEAT_TIMEOUT/10));
             let mut locked_ping = last_ping_clone.lock().unwrap();
 
             if *role_clone.lock().unwrap() != ServerRole::Leader
                 && locked_ping.elapsed() >= election_timeout
             {
-                // println!(
-                //     "Server {} election timeout triggered, starting election in term {}",
-                //     raft_server.instance_id, raft_server.current_term
-                // );
-                // raft_server.start_election(&mut network);
-
                 sender_clone
                     .send(Event::Local(LocalEvent {
                         payload: LocalPayload::StartElection,
@@ -66,11 +61,6 @@ fn main() {
             }
 
             if *role_clone.lock().unwrap() == ServerRole::Leader {
-                // println!(
-                //     "Server {} (Leader) sending heartbeat in term {}",
-                //     raft_server.instance_id, raft_server.current_term
-                // );
-                // raft_server.replicate_log(&mut network, true);
                 sender_clone
                     .send(Event::Local(LocalEvent {
                         payload: LocalPayload::SendHeartbeat,
@@ -88,6 +78,11 @@ fn main() {
 
     let mut input = String::new();
     io::stdin().read_line(&mut input).unwrap();
+    loop {
+        // io::stdin().read_line(&mut input).unwrap();
+        // update_config(&config_map, "config.txt");
+        thread::sleep(Duration::from_millis(100000));
+    }
 }
 
 fn handle_events(
@@ -185,10 +180,7 @@ fn handle_events(
                                 );
                                 raft_server.handle_prepare(payload, message.from, &mut network);
                             }
-                            NetworkPayload::PrepareResponse {
-                                transaction_id,
-                                success,
-                            } => todo!(),
+                            NetworkPayload::PrepareResponse { .. } => todo!(),
                             NetworkPayload::Commit { .. } => {
                                 println!(
                                     "Server {} received Commit from {}",
