@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::fs;
+use log::{info, debug};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Transaction {
@@ -52,10 +53,10 @@ impl DataStore {
     pub fn load(instance_id: u64) -> Self {
         let ds: DataStore;
         if let Some(new_ds) = DataStore::load_from_file(instance_id) {
-            println!("Loaded existing datastore from file.");
+            info!("Loaded existing datastore from file.");
             ds = new_ds;
         } else {
-            println!("No existing datastore found. Creating new and initializing.");
+            info!("No existing datastore found. Creating new and initializing.");
             let mut new_ds = DataStore::new(instance_id);
             new_ds.init();
             new_ds.save_to_file();
@@ -143,7 +144,7 @@ impl DataStore {
 
     pub fn process_transfer(&mut self, from: u64, to: u64, amount: i64, twopc_prepare: bool, twopc_transaction_id: u64) -> bool {
         // if self.locks.contains_key(&from) || self.locks.contains_key(&to) {
-        //     println!("Transaction failed: locked!");
+        //     info!("Transaction failed: locked!");
         //     panic!();
         //     return false;
         // }
@@ -156,13 +157,13 @@ impl DataStore {
                 let balance_to = self.kv_store.get_mut(&to).unwrap();
                 *balance_to += amount;
                 self.record_transaction(from, to, amount, twopc_prepare, twopc_transaction_id);
-                println!(
+                info!(
                     "Transaction successful: {} -> {} ({} units) TWOPC prepare? {}",
                     from, to, amount, twopc_prepare
                 );
                 return true;
             } else {
-                println!("Transaction failed: insufficient funds or invalid account.");
+                info!("Transaction failed: insufficient funds or invalid account.");
                 panic!();
             }
         } else {
@@ -176,14 +177,14 @@ impl DataStore {
                         *balance -= amount;
                     }
                     self.record_transaction(from, to, amount, twopc_prepare, twopc_transaction_id);
-                    println!(
+                    info!(
                         "Transaction successful: {} -> {} ({} units) TWOPC prepare? {}",
                         from, to, amount, twopc_prepare
                     );
                     return true;
                 } else {
                     // Ideally we should never reach here
-                    println!("Transaction failed: insufficient funds or invalid account.");
+                    info!("Transaction failed: insufficient funds or invalid account.");
                     panic!()
                 }
             } else {
@@ -194,7 +195,7 @@ impl DataStore {
                     *balance += amount;
                 }
                 self.record_transaction(from, to, amount, twopc_prepare, twopc_transaction_id);
-                println!(
+                info!(
                     "Transaction successful: {} -> {} ({} units) TWOPC prepare? {}",
                     from, to, amount, twopc_prepare
                 );
@@ -230,11 +231,7 @@ impl DataStore {
         prev_log_term: &Option<u64>,
     ) -> bool {
         if prev_log_index.is_none() {
-            if self.log.len() == 0 {
-                return true;
-            } else {
-                return false;
-            }
+            return true;
         }
         if prev_log_index.unwrap() >= self.log.len() {
             return false;
@@ -258,7 +255,8 @@ impl DataStore {
         if commit_index != 0 && self.log_entry(commit_index - 1).unwrap().term != current_term {
             return;
         }
-        println!(
+        debug!("Commit index map {:?}", commit_index_map);
+        debug!(
             "Server {} applying committed entries up to index {}",
             self.instance_id, commit_index
         );
@@ -283,7 +281,7 @@ impl DataStore {
         if commit_index.unwrap() >= self.log.len() {
             return;
         }
-        println!(
+        debug!(
             "Server {} applying committed entries up to index {}",
             self.instance_id,
             commit_index.unwrap()
@@ -308,7 +306,7 @@ impl DataStore {
         index: usize,
     ) {
         self.pending_transactions.insert(transaction_id, index);
-        println!(
+        debug!(
             "Server {} added pending transaction {}",
             self.instance_id, transaction_id
         );
@@ -319,7 +317,7 @@ impl DataStore {
     // pub fn acquire_locks(&mut self, items: Vec<u64>) -> bool {
     //     for &item in &items {
     //         if self.locks.contains_key(&item) {
-    //             println!(
+    //             info!(
     //                 "Server {} failed to lock item {}: already locked",
     //                 self.instance_id, item
     //             );
@@ -332,7 +330,7 @@ impl DataStore {
     //             self.locks.insert(item, 1);
     //         }
     //     }
-    //     println!(
+    //     info!(
     //         "Server {} acquired locks for items {:?}",
     //         self.instance_id, items
     //     );
@@ -344,7 +342,7 @@ impl DataStore {
     //     for &item in &items {
     //         self.locks.remove(&item);
     //     }
-    //     println!(
+    //     info!(
     //         "Server {} released locks for items {:?}",
     //         self.instance_id, items
     //     );

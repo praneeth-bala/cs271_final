@@ -5,11 +5,13 @@ use cs271_final::utils::network::Network;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{env, io, process, thread, time::Duration};
+use log::{info, debug, trace};
 
 mod server;
 use server::{RaftServer, ServerRole};
 
 fn main() {
+    env_logger::init();
     // Collect command-line arguments
     let args: Vec<String> = env::args().collect();
 
@@ -96,7 +98,7 @@ fn handle_events(
             Ok(event) => {
                 match event {
                     Event::Local(message) => {
-                        println!("Handling local event");
+                        trace!("Handling local event");
                         // Handle local events if any
                         match message {
                             LocalEvent {
@@ -117,28 +119,28 @@ fn handle_events(
                             .expect("Failed to deserialize payload");
                         match payload {
                             NetworkPayload::PrintBalance { id } => {
-                                println!(
+                                info!(
                                     "Server {} processing PrintBalance for ID {}",
                                     raft_server.instance_id, id
                                 );
                                 raft_server.datastore.print_value(id);
                             }
                             NetworkPayload::PrintDatastore => {
-                                println!(
+                                info!(
                                     "Server {} processing PrintDatastore",
                                     raft_server.instance_id
                                 );
                                 raft_server.datastore.print_datastore();
                             }
                             NetworkPayload::Transfer { from, to, amount } => {
-                                println!(
+                                info!(
                                     "Server {} received Transfer request: {} -> {} ({} units)",
                                     raft_server.instance_id, from, to, amount
                                 );
                                 raft_server.handle_transfer(payload, message.from, &mut network);
                             }
                             NetworkPayload::RequestVote { .. } => {
-                                println!(
+                                debug!(
                                     "Server {} received RequestVote from {}",
                                     raft_server.instance_id, message.from
                                 );
@@ -149,11 +151,11 @@ fn handle_events(
                                 );
                             }
                             NetworkPayload::VoteResponse { term, vote_granted } => {
-                                println!("Server {} received VoteResponse from {} in term {}, vote_granted: {}", raft_server.instance_id, message.from, term, vote_granted);
+                                debug!("Server {} received VoteResponse from {} in term {}, vote_granted: {}", raft_server.instance_id, message.from, term, vote_granted);
                                 raft_server.handle_vote_response(payload);
                             }
                             NetworkPayload::AppendEntries { .. } => {
-                                println!(
+                                debug!(
                                     "Server {} received AppendEntries from {}",
                                     raft_server.instance_id, message.from
                                 );
@@ -166,7 +168,7 @@ fn handle_events(
                                 );
                             }
                             NetworkPayload::AppendEntriesResponse { term, success, .. } => {
-                                println!("Server {} received AppendEntriesResponse from {} in term {}, success: {}", raft_server.instance_id, message.from, term, success);
+                                debug!("Server {} received AppendEntriesResponse from {} in term {}, success: {}", raft_server.instance_id, message.from, term, success);
                                 raft_server.handle_append_entries_response(
                                     payload,
                                     message.from,
@@ -174,7 +176,7 @@ fn handle_events(
                                 );
                             }
                             NetworkPayload::Prepare { .. } => {
-                                println!(
+                                info!(
                                     "Server {} received Prepare from {}",
                                     raft_server.instance_id, message.from
                                 );
@@ -182,14 +184,14 @@ fn handle_events(
                             }
                             NetworkPayload::PrepareResponse { .. } => todo!(),
                             NetworkPayload::Commit { .. } => {
-                                println!(
+                                info!(
                                     "Server {} received Commit from {}",
                                     raft_server.instance_id, message.from
                                 );
                                 raft_server.handle_commit(payload, message.from, &mut network);
                             }
                             NetworkPayload::Abort { .. } => {
-                                println!(
+                                info!(
                                     "Server {} received Abort from {}",
                                     raft_server.instance_id, message.from
                                 );
@@ -199,7 +201,7 @@ fn handle_events(
                                 transaction_id,
                                 success,
                             } => {
-                                println!(
+                                info!(
                                     "Server {} received Ack for transaction {} with success: {}",
                                     raft_server.instance_id, transaction_id, success
                                 );
@@ -210,7 +212,7 @@ fn handle_events(
                 }
             }
             Err(_) => {
-                println!("mpsc channel closed");
+                debug!("mpsc channel closed");
                 break;
             }
         }

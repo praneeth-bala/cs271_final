@@ -7,10 +7,12 @@ use cs271_final::utils::network::Network;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
+use log::{info, trace};
 use std::time::{Duration, Instant};
 use std::{io, process, thread};
 
 fn main() {
+    env_logger::init();
     let (sender, receiver): (Sender<Event>, Receiver<Event>) = mpsc::channel();
     let mut network = Network::new(CLIENT_INSTANCE_ID, sender.clone(), false);
     if !network.connect_to_proxy(PROXY_PORT) {
@@ -181,7 +183,7 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
         }))
         .expect("Failed to send Prepare to to cluster");
 
-    println!(
+    info!(
         "Sent Prepare messages for transaction {} to servers {} and {}",
         transaction_id, from_cluster, to_cluster
     );
@@ -197,7 +199,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
             Ok(event) => {
                 match event {
                     Event::Local(message) => {
-                        println!("Handling local event: {:?}", message.payload);
+                        trace!("Handling local event: {:?}", message.payload);
                         match message.payload {
                             LocalPayload::PrintBalance { id } => {
                                 let instances = DataStore::get_all_instances_from_id(id);
@@ -258,7 +260,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         transaction_id,
                                         (all_instances, HashSet::new(), Instant::now(), false),
                                     );
-                                    println!(
+                                    info!(
                                         "Initialized 2PC state for transaction {}",
                                         transaction_id
                                     );
@@ -271,7 +273,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                 to,
                                 amount,
                             } => {
-                                println!(
+                                info!(
                                     "Sending Prepare to server {} for transaction {}",
                                     target, transaction_id
                                 );
@@ -307,19 +309,19 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                         }
                     }
                     Event::Network(message) => {
-                        println!(
+                        trace!(
                             "Handling network event from {} to {}",
                             message.from, message.to
                         );
                         match NetworkPayload::deserialize(message.payload) {
                             Ok(payload) => {
-                                println!("Deserialized payload: {:?}", payload);
+                                trace!("Deserialized payload: {:?}", payload);
                                 match payload {
                                     NetworkPayload::PrepareResponse {
                                         transaction_id,
                                         success,
                                     } => {
-                                        println!("Received PrepareResponse for transaction {}: success={}", transaction_id, success);
+                                        info!("Received PrepareResponse for transaction {}: success={}", transaction_id, success);
                                         if let Some((instances, acks, _, committed)) =
                                             pending_2pc.get_mut(&transaction_id)
                                         {
@@ -331,13 +333,13 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                                     continue;
                                                 }
                                                 acks.insert(message.from);
-                                                println!(
+                                                info!(
                                                     "Transaction {} prepare acks: {}/2",
                                                     transaction_id,
                                                     acks.len()
                                                 );
                                                 if acks.len() == 2 {
-                                                    println!("All clusters prepared for transaction {}, committing", transaction_id);
+                                                    info!("All clusters prepared for transaction {}, committing", transaction_id);
                                                     for instance in instances {
                                                         network.send_message(NetworkEvent {
                                                             from: CLIENT_INSTANCE_ID,
@@ -352,7 +354,9 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                                     acks.clear();
                                                 }
                                             } else {
-                                                println!("Cluster failed to prepare for transaction {}, aborting", transaction_id);
+                                                info!("Cluster failed to prepare for transaction {}, aborting", transaction_id);
+                                                *committed = true;
+                                                acks.clear();
                                                 for instance in instances {
                                                     network.send_message(NetworkEvent {
                                                         from: CLIENT_INSTANCE_ID,
@@ -365,7 +369,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                                 }
                                             }
                                         } else {
-                                            println!(
+                                            info!(
                                                 "No pending 2PC state for transaction {}",
                                                 transaction_id
                                             );
@@ -375,7 +379,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         transaction_id,
                                         success,
                                     } => {
-                                        println!(
+                                        info!(
                                             "Received Ack for transaction {}: success={}",
                                             transaction_id, success
                                         );
@@ -383,7 +387,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             pending_2pc.get_mut(&transaction_id)
                                         {
                                             acks.insert(message.from);
-                                            println!(
+                                            info!(
                                                 "Transaction {} acks: {}/{}",
                                                 transaction_id,
                                                 acks.len(),
@@ -391,23 +395,23 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             );
                                             if acks.len() == instances.len() {
                                                 let latency = start_time.elapsed();
-                                                println!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
+                                                info!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
                                                 completed_transactions
                                                     .push((transaction_id, latency));
                                                 pending_2pc.remove(&transaction_id);
                                             }
                                         }
                                     }
-                                    other => println!("Unexpected payload: {:?}", other),
+                                    other => trace!("Unexpected payload: {:?}", other),
                                 }
                             }
-                            Err(e) => println!("Failed to deserialize payload: {}", e),
+                            Err(e) => trace!("Failed to deserialize payload: {}", e),
                         }
                     }
                 }
             }
             Err(_) => {
-                println!("mpsc channel closed");
+                trace!("mpsc channel closed");
                 break;
             }
         }

@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::fs;
 
 fn main() {
+    env_logger::init();
     let (sender, receiver): (Sender<Event>, Receiver<Event>) = mpsc::channel();
     let mut network = Network::new(PROXY_INSTANCE_ID, sender.clone(), true);
     let config_map = Arc::new(Mutex::new(load_config("config.txt")));
