@@ -370,7 +370,7 @@ impl RaftServer {
                                         to: CLIENT_INSTANCE_ID,
                                         payload: NetworkPayload::Ack {
                                             transaction_id: key,
-                                            success: true,
+                                            success: if tran.value == 0 {false} else {true},
                                         }
                                         .serialize(),
                                     });
@@ -766,7 +766,7 @@ impl RaftServer {
                         to: CLIENT_INSTANCE_ID,
                         payload: NetworkPayload::Ack {
                             transaction_id,
-                            success: true,
+                            success: false,
                         }
                         .serialize(),
                     });
