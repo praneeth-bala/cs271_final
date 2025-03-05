@@ -162,6 +162,7 @@ impl RaftServer {
                         self.instance_id, candidate_id, term
                     );
                     self.voted_for = Some(candidate_id);
+                    self.leader_id = Some(candidate_id);
                 } else {
                     debug!("Server {} denying vote to candidate {} in term {}: already voted or log not up-to-date", self.instance_id, candidate_id, term);
                 }
@@ -414,7 +415,7 @@ impl RaftServer {
         network: &mut Network,
     ) {
         match request {
-            NetworkPayload::Transfer { from, to, amount } => {
+            NetworkPayload::Transfer { from, to, amount, transaction_id } => {
                 // For intra-shard, initiate Raft consensus
                 if self.datastore.kv_store.contains_key(&from) && self.datastore.kv_store.contains_key(&to) {
                     if *self.role.lock().unwrap() != ServerRole::Leader {
@@ -453,6 +454,10 @@ impl RaftServer {
                         .insert(self.instance_id, self.datastore.log.len());
                     self.commit_index_map
                         .insert(self.instance_id, self.datastore.log.len());
+                    self.datastore.add_pending_transaction(
+                        transaction_id,
+                        self.datastore.log.len()-1
+                    );
                     self.replicate_log(network, None);
                 }
             }

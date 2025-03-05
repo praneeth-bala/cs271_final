@@ -74,7 +74,7 @@ impl DataStore {
     }
 
     pub fn save_to_file(&self) {
-        let filename = format!("server_{}_store.json", self.instance_id);
+        let filename = format!("out/server_{}_store.json", self.instance_id);
         let json = serde_json::to_string_pretty(self).unwrap();
         let mut file = OpenOptions::new()
             .create(true)
@@ -86,7 +86,7 @@ impl DataStore {
     }
 
     pub fn load_from_file(instance_id: u64) -> Option<Self> {
-        let filename = format!("server_{}_store.json", instance_id);
+        let filename = format!("out/server_{}_store.json", instance_id);
         if let Ok(content) = fs::read_to_string(&filename) {
             serde_json::from_str(&content).ok()
         } else {

@@ -103,7 +103,7 @@ fn main() {
                         let transaction_id = transaction_id_counter;
                         sender
                             .send(Event::Local(LocalEvent {
-                                payload: LocalPayload::Transfer { from, to, amount },
+                                payload: LocalPayload::Transfer { from, to, amount, transaction_id },
                             }))
                             .expect("Failed to send transfer event");
 
@@ -191,6 +191,7 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
 
 fn handle_events(mut network: Network, receiver: Receiver<Event>) {
     let mut pending_2pc: HashMap<u64, (Vec<u64>, HashSet<u64>, Instant, bool)> = HashMap::new();
+    let mut pending_raft: HashMap<u64, Instant> = HashMap::new();
     let mut completed_transactions: Vec<(u64, Duration)> = Vec::new();
     // let timeout_duration = Duration::from_secs(5);
 
@@ -218,12 +219,16 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     payload: NetworkPayload::PrintDatastore.serialize(),
                                 });
                             }
-                            LocalPayload::Transfer { from, to, amount } => {
+                            LocalPayload::Transfer { from, to, amount , transaction_id} => {
                                 if from / 1000 == to / 1000 {
+                                    pending_raft.insert(
+                                        transaction_id,
+                                        Instant::now(),
+                                    );
                                     network.send_message(NetworkEvent {
                                         from: CLIENT_INSTANCE_ID,
                                         to: DataStore::get_random_instance_from_id(from),
-                                        payload: NetworkPayload::Transfer { from, to, amount }
+                                        payload: NetworkPayload::Transfer { from, to, amount, transaction_id }
                                             .serialize(),
                                     });
                                 }
@@ -395,11 +400,17 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             );
                                             if acks.len() == instances.len() {
                                                 let latency = start_time.elapsed();
-                                                info!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
+                                                println!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
                                                 completed_transactions
                                                     .push((transaction_id, latency));
                                                 pending_2pc.remove(&transaction_id);
                                             }
+                                        } else if let Some(start_time) = pending_raft.get_mut(&transaction_id) {
+                                            let latency = start_time.elapsed();
+                                            println!("Transaction {} fully completed in {:?}", transaction_id, latency);
+                                            completed_transactions
+                                                .push((transaction_id, latency));
+                                            pending_raft.remove(&transaction_id);
                                         }
                                     }
                                     other => trace!("Unexpected payload: {:?}", other),

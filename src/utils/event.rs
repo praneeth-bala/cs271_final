@@ -20,6 +20,7 @@ pub enum NetworkPayload {
         from: u64,
         to: u64,
         amount: i64,
+        transaction_id: u64,
     },
 
     RequestVote {
@@ -95,6 +96,7 @@ pub enum LocalPayload {
         from: u64,
         to: u64,
         amount: i64,
+        transaction_id: u64,
     },
 
     SendHeartbeat,

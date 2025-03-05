@@ -132,10 +132,10 @@ fn handle_events(
                                 );
                                 raft_server.datastore.print_datastore();
                             }
-                            NetworkPayload::Transfer { from, to, amount } => {
+                            NetworkPayload::Transfer { from, to, amount, transaction_id } => {
                                 info!(
-                                    "Server {} received Transfer request: {} -> {} ({} units)",
-                                    raft_server.instance_id, from, to, amount
+                                    "Server {} received Transfer request: {} -> {} ({} units), ID: {}",
+                                    raft_server.instance_id, from, to, amount, transaction_id
                                 );
                                 raft_server.handle_transfer(payload, message.from, &mut network);
                             }
