@@ -351,7 +351,8 @@ impl RaftServer {
                         let mut to_delete: Vec<u64> = Vec::new();
                         for (&key, index) in self.datastore.pending_transactions.iter() {
                             if self.datastore.committed_transactions.len() > *index {
-                                if self.datastore.log_entry(*index).unwrap().command.twopc_prepare {
+                                let tran = self.datastore.log_entry(*index).unwrap().command;
+                                if tran.twopc_prepare {
                                     // If prepare was replicated
                                     network.send_message(NetworkEvent {
                                         from: self.instance_id,
@@ -378,6 +379,9 @@ impl RaftServer {
                             }
                         }
                         for key in to_delete.iter() {
+                            let index = self.datastore.pending_transactions.get(key).unwrap();
+                            let tran = self.datastore.log_entry(*index).unwrap().command;
+                            self.datastore.release_locks(vec![tran.from, tran.to]);
                             self.datastore.pending_transactions.remove(key);
                         }
                         self.datastore.save_to_file();
@@ -430,6 +434,18 @@ impl RaftServer {
                             payload: request.serialize(),
                         });
                         return;
+                    }
+
+                    if !self.datastore.acquire_locks(vec![from, to]) {
+                        network.send_message(NetworkEvent {
+                            from: self.instance_id,
+                            to: CLIENT_INSTANCE_ID,
+                            payload: NetworkPayload::Ack {
+                                transaction_id,
+                                success: false,
+                            }
+                            .serialize(),
+                        });
                     }
 
                     // Same cluster (shard)
@@ -577,11 +593,11 @@ impl RaftServer {
 
                 let shard_start = ((self.instance_id - 1) / 3) * 1000 + 1;
                 let shard_end = shard_start + 999;
-                // let mut locked_items = Vec::new();
+                let mut locked_items = Vec::new();
                 let mut sufficient_funds = true;
 
                 if from >= shard_start && from <= shard_end {
-                    // locked_items.push(from);
+                    locked_items.push(from);
                     if let Some(balance) = self.datastore.kv_store.get(&from) {
                         sufficient_funds = *balance >= amount;
                         info!(
@@ -592,14 +608,14 @@ impl RaftServer {
                         sufficient_funds = false;
                     }
                 }
-                // if to >= shard_start && to <= shard_end {
-                //     locked_items.push(to);
-                // }
+                if to >= shard_start && to <= shard_end {
+                    locked_items.push(to);
+                }
 
                 if !sufficient_funds
-                    // || !self
-                    //     .datastore
-                    //     .acquire_locks(locked_items.clone())
+                    || !self
+                        .datastore
+                        .acquire_locks(locked_items.clone())
                 {
                     info!("Server {} aborting Prepare for transaction {}: insufficient funds or locks unavailable", self.instance_id, transaction_id);
                     network.send_message(NetworkEvent {
@@ -611,7 +627,7 @@ impl RaftServer {
                         }
                         .serialize(),
                     });
-                    // self.datastore.release_locks(locked_items);
+                    self.datastore.release_locks(locked_items);
                     return;
                 }
 

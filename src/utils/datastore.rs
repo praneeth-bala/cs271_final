@@ -26,9 +26,9 @@ pub struct DataStore {
 
     // Meant to be used only by leader
     // Key: Transaction ID, Value: Index in log
-    pub pending_transactions: HashMap<u64, usize>
+    pub pending_transactions: HashMap<u64, usize>,
 
-    // pub locks: HashMap<u64, u64>, // Key: item_id, Value: 0,1
+    pub locks: HashMap<u64, u64>, // Key: item_id, Value: 0,1
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -46,7 +46,7 @@ impl DataStore {
             committed_transactions: Vec::new(),
             log: Vec::new(),
             pending_transactions: HashMap::new(),
-            // locks: HashMap::new(),
+            locks: HashMap::new(),
         }
     }
 
@@ -314,37 +314,37 @@ impl DataStore {
     }
 
     // New method to acquire locks for a transaction
-    // pub fn acquire_locks(&mut self, items: Vec<u64>) -> bool {
-    //     for &item in &items {
-    //         if self.locks.contains_key(&item) {
-    //             info!(
-    //                 "Server {} failed to lock item {}: already locked",
-    //                 self.instance_id, item
-    //             );
-    //             return false; // Lock unavailable
-    //         }
-    //     }
-    //     // All locks available, acquire them
-    //     for &item in &items {
-    //         if self.kv_store.contains_key(&item) {
-    //             self.locks.insert(item, 1);
-    //         }
-    //     }
-    //     info!(
-    //         "Server {} acquired locks for items {:?}",
-    //         self.instance_id, items
-    //     );
-    //     true
-    // }
+    pub fn acquire_locks(&mut self, items: Vec<u64>) -> bool {
+        for &item in &items {
+            if self.locks.contains_key(&item) {
+                info!(
+                    "Server {} failed to lock item {}: already locked",
+                    self.instance_id, item
+                );
+                return false; // Lock unavailable
+            }
+        }
+        // All locks available, acquire them
+        for &item in &items {
+            if self.kv_store.contains_key(&item) {
+                self.locks.insert(item, 1);
+            }
+        }
+        info!(
+            "Server {} acquired locks for items {:?}",
+            self.instance_id, items
+        );
+        true
+    }
 
-    // // New method to release locks for a transaction
-    // pub fn release_locks(&mut self, items: Vec<u64>) {
-    //     for &item in &items {
-    //         self.locks.remove(&item);
-    //     }
-    //     info!(
-    //         "Server {} released locks for items {:?}",
-    //         self.instance_id, items
-    //     );
-    // }
+    // New method to release locks for a transaction
+    pub fn release_locks(&mut self, items: Vec<u64>) {
+        for &item in &items {
+            self.locks.remove(&item);
+        }
+        info!(
+            "Server {} released locks for items {:?}",
+            self.instance_id, items
+        );
+    }
 }
