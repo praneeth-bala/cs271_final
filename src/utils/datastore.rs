@@ -21,7 +21,7 @@ pub struct Transaction {
 pub struct DataStore {
     pub instance_id: u64,
     pub kv_store: BTreeMap<u64, i64>,
-    pub committed_transactions: Vec<Transaction>,
+    pub replicated_transactions: Vec<Transaction>,
     pub log: Vec<LogEntry>,
 
     // Meant to be used only by leader
@@ -43,7 +43,7 @@ impl DataStore {
         Self {
             instance_id,
             kv_store: BTreeMap::new(),
-            committed_transactions: Vec::new(),
+            replicated_transactions: Vec::new(),
             log: Vec::new(),
             pending_transactions: HashMap::new(),
             locks: HashMap::new(),
@@ -101,7 +101,7 @@ impl DataStore {
     }
 
     pub fn record_transaction(&mut self, from: u64, to: u64, value: i64, twopc_prepare: bool, twopc_transaction_id: u64) {
-        self.committed_transactions
+        self.replicated_transactions
             .push(Transaction { from, to, value, twopc_prepare, twopc_transaction_id });
         self.save_to_file();
     }
@@ -137,7 +137,7 @@ impl DataStore {
 
     pub fn print_datastore(&self) {
         println!("Committed Transactions on Server {}:", self.instance_id);
-        for tx in &self.committed_transactions {
+        for tx in &self.replicated_transactions {
             println!("From: {}, To: {}, Amount: {}", tx.from, tx.to, tx.value);
         }
     }
@@ -260,7 +260,7 @@ impl DataStore {
             "Server {} applying committed entries up to index {}",
             self.instance_id, commit_index
         );
-        for i in self.committed_transactions.len()..commit_index {
+        for i in self.replicated_transactions.len()..commit_index {
             if let Some(entry) = self.log.get(i) {
                 self.process_transfer(
                     entry.command.from,
@@ -286,7 +286,7 @@ impl DataStore {
             self.instance_id,
             commit_index.unwrap()
         );
-        for i in self.committed_transactions.len()..commit_index.unwrap() + 1 {
+        for i in self.replicated_transactions.len()..commit_index.unwrap() + 1 {
             if let Some(entry) = self.log.get(i) {
                 self.process_transfer(
                     entry.command.from,

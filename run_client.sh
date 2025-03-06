@@ -1,2 +1,2 @@
 #!/bin/bash
-RUST_LOG=info ./target/debug/client
+RUST_LOG=warn ./target/debug/client

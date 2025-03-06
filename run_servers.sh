@@ -11,7 +11,7 @@ sleep 2
 
 for i in {1..9}
 do
-    RUST_LOG="debug" ./target/debug/server $i > out/server$i.out 2>&1 < /dev/null &
+    RUST_LOG="info" ./target/debug/server $i > out/server$i.out 2>&1 < /dev/null &
 done
 
 trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM

@@ -23,7 +23,7 @@ fn main() {
     // Periodically check to abort pending transactions for cross shard
     let sender_clone = sender.clone();
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(ABORT_TIMEOUT));
+        thread::sleep(Duration::from_millis(ABORT_TIMEOUT/10));
         sender_clone
             .send(Event::Local(LocalEvent {
                 payload: LocalPayload::CheckAbort,
@@ -201,6 +201,7 @@ fn load_transactions_from_file(
 fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: &Sender<Event>) {
     let from_cluster = DataStore::get_random_instance_from_id(from);
     let to_cluster = DataStore::get_random_instance_from_id(to);
+    println!("Sending transaction {} to servers {} and {}", transaction_id, from_cluster, to_cluster);
 
     let from_instances = DataStore::get_all_instances_from_id(from);
     let to_instances = DataStore::get_all_instances_from_id(to);
@@ -250,7 +251,7 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
 
 fn handle_events(mut network: Network, receiver: Receiver<Event>) {
     let mut pending_2pc: HashMap<u64, (Vec<u64>, HashSet<u64>, Instant, bool)> = HashMap::new();
-    let mut pending_raft: HashMap<u64, Instant> = HashMap::new();
+    let mut pending_raft: HashMap<u64, (u64, Instant)> = HashMap::new();
     let mut completed_transactions: Vec<(u64, Duration)> = Vec::new();
     // let timeout_duration = Duration::from_secs(5);
 
@@ -280,13 +281,15 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                             }
                             LocalPayload::Transfer { from, to, amount , transaction_id} => {
                                 if from / 1000 == to / 1000 {
+                                    let server_to_send = DataStore::get_random_instance_from_id(from);
                                     pending_raft.insert(
                                         transaction_id,
-                                        Instant::now(),
+                                        (server_to_send, Instant::now()),
                                     );
+                                    println!("Sending transaction {} to server {}", transaction_id, server_to_send);
                                     network.send_message(NetworkEvent {
                                         from: CLIENT_INSTANCE_ID,
-                                        to: DataStore::get_random_instance_from_id(from),
+                                        to: server_to_send,
                                         payload: NetworkPayload::Transfer { from, to, amount, transaction_id }
                                             .serialize(),
                                     });
@@ -354,8 +357,10 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                 });
                             }
                             LocalPayload::CheckAbort {} => {
+                                let mut to_delete = Vec::new();
                                 for (transaction_id, (instances, _, instant, committed)) in pending_2pc.iter() {
                                     if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT) && !committed {
+                                        println!("Aborting transaction {} because timed out", transaction_id);
                                         for instance in instances {
                                             network.send_message(NetworkEvent {
                                                 from: CLIENT_INSTANCE_ID,
@@ -367,6 +372,28 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             });
                                         }
                                     }
+                                }
+                                for transaction_id in to_delete.iter() {
+                                    pending_2pc.remove(&transaction_id);
+                                }
+                                to_delete.clear();
+
+                                for (transaction_id, (instance, instant)) in pending_raft.iter() {
+                                    if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT) {
+                                        println!("Aborting transaction {} because timed out", transaction_id);
+                                        to_delete.push(*transaction_id);
+                                        network.send_message(NetworkEvent {
+                                            from: CLIENT_INSTANCE_ID,
+                                            to: *instance,
+                                            payload: NetworkPayload::Abort {
+                                                transaction_id: *transaction_id,
+                                            }
+                                            .serialize(),
+                                        });
+                                    }
+                                }
+                                for transaction_id in to_delete {
+                                    pending_raft.remove(&transaction_id);
                                 }
                             }
                             _ => {}
@@ -464,9 +491,9 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                                     .push((transaction_id, latency));
                                                 pending_2pc.remove(&transaction_id);
                                             }
-                                        } else if let Some(start_time) = pending_raft.get_mut(&transaction_id) {
+                                        } else if let Some((_, start_time)) = pending_raft.get_mut(&transaction_id) {
                                             let latency = start_time.elapsed();
-                                            println!("Transaction {} fully completed in {:?}", transaction_id, latency);
+                                            println!("Transaction {} completed with success: {} in {:?}", transaction_id, success, latency);
                                             completed_transactions
                                                 .push((transaction_id, latency));
                                             pending_raft.remove(&transaction_id);

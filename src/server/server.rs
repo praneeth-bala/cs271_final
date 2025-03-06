@@ -351,7 +351,7 @@ impl RaftServer {
                         // Need to check if latest commit index exceeds any pending transaction index in the log and send prepare success message for those.
                         let mut to_delete: Vec<u64> = Vec::new();
                         for (&key, index) in self.datastore.pending_transactions.iter() {
-                            if self.datastore.committed_transactions.len() > *index {
+                            if self.datastore.replicated_transactions.len() > *index {
                                 let tran = self.datastore.log_entry(*index).unwrap().command;
                                 if tran.twopc_prepare {
                                     // If prepare was replicated
@@ -448,7 +448,7 @@ impl RaftServer {
                         sufficient_funds = false;
                     }
 
-                    if !sufficient_funds || !self.datastore.acquire_locks(vec![from, to]) {
+                    if amount==0 || !sufficient_funds || !self.datastore.acquire_locks(vec![from, to]) {
                         network.send_message(NetworkEvent {
                             from: self.instance_id,
                             to: CLIENT_INSTANCE_ID,
@@ -495,7 +495,7 @@ impl RaftServer {
     }
 
     pub fn become_leader(&mut self) {
-        debug!(
+        info!(
             "Server {} becoming leader in term {}",
             self.instance_id, self.current_term
         );
@@ -558,8 +558,8 @@ impl RaftServer {
                     } else {
                         vec![]
                     },
-                    leader_commit: if self.datastore.committed_transactions.len() > 0 {
-                        Some(self.datastore.committed_transactions.len() - 1)
+                    leader_commit: if self.datastore.replicated_transactions.len() > 0 {
+                        Some(self.datastore.replicated_transactions.len() - 1)
                     } else {
                         None
                     },
@@ -625,7 +625,7 @@ impl RaftServer {
                     locked_items.push(to);
                 }
 
-                if !sufficient_funds
+                if amount==0 || !sufficient_funds
                     || !self
                         .datastore
                         .acquire_locks(locked_items.clone())
@@ -640,7 +640,6 @@ impl RaftServer {
                         }
                         .serialize(),
                     });
-                    self.datastore.release_locks(locked_items);
                     return;
                 }
 
