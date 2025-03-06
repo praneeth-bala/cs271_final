@@ -135,8 +135,8 @@ fn main() {
             "5" => {
                 let file_path = "transactions.txt";
                 match load_transactions_from_file(file_path, &sender, &mut transaction_id_counter) {
-                    Ok(count) => println!("Successfully loaded and triggered {} transactions from ../transactions.txt.", count),
-                    Err(e) => println!("Failed to load transactions from ../transactions.txt: {}", e),
+                    Ok(count) => println!("Successfully loaded and triggered {} transactions from transactions.txt.", count),
+                    Err(e) => println!("Failed to load transactions from transactions.txt: {}", e),
                 }
             }
             "6" => {
