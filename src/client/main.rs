@@ -10,6 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use log::{info, trace};
 use std::time::{Duration, Instant};
 use std::{io, process, thread};
+use std::fs;
 
 fn main() {
     env_logger::init();
@@ -44,7 +45,8 @@ fn main() {
         println!("2. Print Datastore");
         println!("3. Transfer");
         println!("4. Performance");
-        println!("5. Exit");
+        println!("5. Load Transactions from input file");
+        println!("6. Exit");
 
         let mut choice = String::new();
         io::stdin().read_line(&mut choice).unwrap();
@@ -131,12 +133,69 @@ fn main() {
                     .expect("Failed to send performance event");
             }
             "5" => {
+                let file_path = "transactions.txt";
+                match load_transactions_from_file(file_path, &sender, &mut transaction_id_counter) {
+                    Ok(count) => println!("Successfully loaded and triggered {} transactions from ../transactions.txt.", count),
+                    Err(e) => println!("Failed to load transactions from ../transactions.txt: {}", e),
+                }
+            }
+            "6" => {
                 println!("Exiting...");
                 break;
             }
-            _ => println!("Invalid choice. Please select a number between 1 and 5."),
+            _ => println!("Invalid choice. Please select a number between 1 and 6."),
         }
     }
+}
+
+fn load_transactions_from_file(
+    file_path: &str,
+    sender: &Sender<Event>,
+    transaction_id_counter: &mut u64,
+) -> io::Result<usize> {
+    let content = fs::read_to_string(file_path).expect("Failed to read transactions file");
+    let mut transaction_count = 0;
+
+    for line in content.lines() {
+        let parts: Vec<&str> = line.trim().split_whitespace().collect();
+        if parts.len() != 3 {
+            println!("Skipping invalid line in {}: '{}'", file_path, line);
+            continue;
+        }
+
+        let from = parts[0].parse::<u64>();
+        let to = parts[1].parse::<u64>();
+        let amount = parts[2].parse::<i64>();
+
+        match (from, to, amount) {
+            (Ok(from), Ok(to), Ok(amount)) => {
+                *transaction_id_counter += 1;
+                let transaction_id = *transaction_id_counter;
+                sender
+                    .send(Event::Local(LocalEvent {
+                        payload: LocalPayload::Transfer {
+                            from,
+                            to,
+                            amount,
+                            transaction_id,
+                        },
+                    }))
+                    .expect("Failed to send transfer event");
+
+                if from / 1000 != to / 1000 {
+                    println!(
+                        "Initiating 2PC for cross-shard transaction {}",
+                        transaction_id
+                    );
+                    coordinate_2pc(transaction_id, from, to, amount, sender);
+                }
+                transaction_count += 1;
+            }
+            _ => println!("Invalid data in line in {}: '{}'", file_path, line),
+        }
+    }
+
+    Ok(transaction_count)
 }
 
 fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: &Sender<Event>) {
