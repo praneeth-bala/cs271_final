@@ -573,6 +573,9 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         }
                                     }
                                 }
+                                NetworkPayload::ServerNotFound { instance } => {
+                                    println!("Server ID {} not found", instance);
+                                }
                                 other => trace!("Unexpected payload: {:?}", other),
                             }
                         }

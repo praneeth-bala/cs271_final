@@ -175,9 +175,9 @@ fn handle_events(
                                 transaction_id,
                             } => {
                                 info!(
-                                                                                    "Server {} received Transfer request: {} -> {} ({} units), ID: {}",
-                                                                                    raft_server.instance_id, from, to, amount, transaction_id
-                                                                                );
+                                                                                                            "Server {} received Transfer request: {} -> {} ({} units), ID: {}",
+                                                                                                            raft_server.instance_id, from, to, amount, transaction_id
+                                                                                                        );
                                 raft_server.handle_transfer(payload, message.from, &mut network);
                             }
                             NetworkPayload::RequestVote { .. } => {
@@ -263,6 +263,13 @@ fn handle_events(
                                     raft_server.instance_id,
                                     instance,
                                     message.from
+                                );
+                            }
+                            NetworkPayload::ServerNotFound { instance } => {
+                                trace!(
+                                    "Server {} ignoring Server Not Found for instance {} ",
+                                    raft_server.instance_id,
+                                    instance,
                                 );
                             }
                         }

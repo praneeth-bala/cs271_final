@@ -1,5 +1,5 @@
 use cs271_final::utils::constants::{PROXY_INSTANCE_ID, PROXY_PORT};
-use cs271_final::utils::event::Event;
+use cs271_final::utils::event::{Event, NetworkEvent, NetworkPayload};
 use cs271_final::utils::network::Network;
 
 use std::collections::HashMap;
@@ -73,17 +73,38 @@ fn handle_events(
                             message.from, message.to
                         );
                         let config = config_map.lock().unwrap();
-                        if has_intersection(
-                            config.get(&message.from).unwrap(),
-                            config.get(&message.to).unwrap(),
-                        ) {
-                            println!("Relaying message from {} to {}", message.from, message.to);
-                            network.send_message(message);
-                        } else {
-                            println!(
-                                "Dropping message from {} to {} due to partitioning",
-                                message.from, message.to
-                            );
+                        match (config.get(&message.from), config.get(&message.to)) {
+                            (Some(from_partitions), Some(to_partitions)) => {
+                                if has_intersection(from_partitions, to_partitions) {
+                                    println!(
+                                        "Relaying message from {} to {}",
+                                        message.from, message.to
+                                    );
+                                    network.send_message(message);
+                                } else {
+                                    println!(
+                                        "Dropping message from {} to {} due to partitioning",
+                                        message.from, message.to
+                                    );
+                                }
+                            }
+                            (Some(_), None) => {
+                                println!(
+                                    "Server {} not found, notifying client {}",
+                                    message.to, message.from
+                                );
+                                network.send_message(NetworkEvent {
+                                    from: PROXY_INSTANCE_ID,
+                                    to: message.from,
+                                    payload: NetworkPayload::ServerNotFound {
+                                        instance: message.to,
+                                    }
+                                    .serialize(),
+                                });
+                            }
+                            _ => {
+                                println!("Dropping message from {} to {}: invalid sender or both instances not found", message.from, message.to);
+                            }
                         }
                     }
                 }
