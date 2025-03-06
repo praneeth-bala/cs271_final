@@ -165,6 +165,7 @@ impl RaftServer {
                     self.leader_id = Some(candidate_id);
                 } else {
                     debug!("Server {} denying vote to candidate {} in term {}: already voted or log not up-to-date", self.instance_id, candidate_id, term);
+                    return;
                 }
 
                 network.send_message(NetworkEvent {
