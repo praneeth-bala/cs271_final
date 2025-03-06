@@ -384,6 +384,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         "Aborting transaction {} because timed out",
                                         transaction_id
                                     );
+                                    to_delete.push(*transaction_id);
                                     for instance in instances {
                                         network.send_message(NetworkEvent {
                                             from: CLIENT_INSTANCE_ID,
@@ -516,7 +517,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         );
                                         if acks.len() == instances.len() {
                                             let latency = start_time.elapsed();
-                                            println!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
+                                            println!("Transaction {} completed with success: {} in {:?}", transaction_id, success, latency);
                                             completed_transactions.push((transaction_id, latency));
                                             pending_2pc.remove(&transaction_id);
                                         }
