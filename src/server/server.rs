@@ -285,6 +285,7 @@ impl RaftServer {
                 } else {
                     0
                 };
+                debug!("Entries length: {}", entries.len());
                 for entry in &entries {
                     debug!(
                         "Server {} appending log entry at index {} in term {}",
@@ -508,11 +509,11 @@ impl RaftServer {
         );
         for server in &self.cluster_servers {
             if *server != self.instance_id && (on.is_none() || on.unwrap() == *server) {
-                debug!(
-                    "Server {} sending AppendEntries to server {} in term {}",
-                    self.instance_id, server, self.current_term
-                );
                 let last_log = self.datastore.log_entry(self.next_index_map[&server]);
+                debug!(
+                    "Server {} sending AppendEntries to server {} in term {} with last_log {:?}",
+                    self.instance_id, server, self.current_term, last_log
+                );
                 let request = NetworkPayload::AppendEntries {
                     term: self.current_term,
                     leader_id: self.instance_id,

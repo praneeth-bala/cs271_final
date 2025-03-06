@@ -2,8 +2,11 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc::Sender, Arc, Mutex};
+use std::time::Duration;
 use log::trace;
 use std::thread;
+
+use crate::utils::constants::PACKET_PROCESS_DELAY;
 
 use super::event::{Event, NetworkEvent};
 
@@ -151,6 +154,7 @@ fn handle_connection(instance_id: u64, mut stream: TcpStream, sender: Sender<Eve
                     match serde_json::from_slice::<NetworkEvent>(&message_bytes) {
                         Ok(message) => {
                             trace!("Received message from {}", message.from);
+                            thread::sleep(Duration::from_millis(PACKET_PROCESS_DELAY));
                             sender.send(Event::Network(message)).expect("Failed to send message to mpsc channel");
                         }
                         Err(e) => {

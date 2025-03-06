@@ -1,9 +1,10 @@
-use cs271_final::utils::constants::{HEARTBEAT_TIMEOUT, PROXY_PORT};
+use cs271_final::utils::constants::{HEARTBEAT_TIMEOUT, PACKET_PROCESS_DELAY, PROXY_PORT};
 use cs271_final::utils::event::{Event, LocalEvent, LocalPayload, NetworkPayload};
 use cs271_final::utils::network::Network;
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use std::{env, io, process, thread, time::Duration};
 use log::{info, debug, trace};
 
@@ -45,8 +46,9 @@ fn main() {
     let sender_clone = sender.clone();
     thread::spawn(move || {
         let election_timeout = Duration::from_millis(
-            3 * HEARTBEAT_TIMEOUT + rand::random::<u64>() % HEARTBEAT_TIMEOUT,
-        ); // Random timeout between 3T & 4Ts
+            HEARTBEAT_TIMEOUT + 2*PACKET_PROCESS_DELAY + ((instance_id-1)%3)*2000,
+        );
+        let mut last_heartbeat = Instant::now();
         loop {
             thread::sleep(Duration::from_millis(HEARTBEAT_TIMEOUT/10));
             let mut locked_ping = last_ping_clone.lock().unwrap();
@@ -62,12 +64,17 @@ fn main() {
                 *locked_ping = std::time::Instant::now();
             }
 
+            if last_heartbeat.elapsed() < Duration::from_millis(HEARTBEAT_TIMEOUT) {
+                continue;
+            }
+
             if *role_clone.lock().unwrap() == ServerRole::Leader {
                 sender_clone
                     .send(Event::Local(LocalEvent {
                         payload: LocalPayload::SendHeartbeat,
                     }))
                     .unwrap();
+                last_heartbeat = Instant::now();
             }
         }
     });
@@ -144,6 +151,7 @@ fn handle_events(
                                     "Server {} received RequestVote from {}",
                                     raft_server.instance_id, message.from
                                 );
+                                *last_ping.lock().unwrap() = std::time::Instant::now();
                                 raft_server.handle_request_vote(
                                     payload,
                                     message.from,
