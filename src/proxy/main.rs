@@ -5,6 +5,7 @@ use cs271_final::utils::network::Network;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::{thread, time::Duration};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::fs;
 
@@ -30,25 +31,34 @@ fn main() {
     }
 }
 
-fn load_config(file_path: &str) -> HashMap<u64, usize> {
+fn load_config(file_path: &str) -> HashMap<u64, Vec<usize>> {
     let content = fs::read_to_string(file_path).expect("Failed to read config file");
-    let mut config_map = HashMap::new();
+    let mut config_map: HashMap<u64, Vec<usize>> = HashMap::new();
     for (partition_id, line) in content.lines().enumerate() {
         for server in line.split(',').filter_map(|s| s.trim().parse::<u64>().ok()) {
-            config_map.insert(server, partition_id);
+            if config_map.contains_key(&server) {
+                config_map.get_mut(&server).unwrap().push(partition_id);
+            } else {
+                config_map.insert(server, vec![partition_id]);
+            }
         }
     }
     config_map
 }
 
-fn update_config(config_map: &Arc<Mutex<HashMap<u64, usize>>>, file_path: &str) {
+fn update_config(config_map: &Arc<Mutex<HashMap<u64, Vec<usize>>>>, file_path: &str) {
     let new_config = load_config(file_path);
     let mut guard = config_map.lock().unwrap();
     *guard = new_config;
     println!("Configuration updated.");
 }
 
-fn handle_events(mut network: Network, receiver: Receiver<Event>, config_map: Arc<Mutex<HashMap<u64, usize>>>){
+fn has_intersection(vec1: &Vec<usize>, vec2: &Vec<usize>) -> bool {
+    let set1: HashSet<_> = vec1.iter().collect();
+    vec2.iter().any(|x| set1.contains(x))
+}
+
+fn handle_events(mut network: Network, receiver: Receiver<Event>, config_map: Arc<Mutex<HashMap<u64, Vec<usize>>>>){
     loop {
         match receiver.recv() {
             Ok(event) => {
@@ -60,7 +70,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, config_map: Ar
                     Event::Network(message) => {
                         println!("Handling network event from {} to {}", message.from, message.to);
                         let config = config_map.lock().unwrap();
-                        if config.get(&message.from) == config.get(&message.to) {
+                        if has_intersection(config.get(&message.from).unwrap(), config.get(&message.to).unwrap()) {
                             println!("Relaying message from {} to {}", message.from, message.to);
                             network.send_message(message);
                         } else {
