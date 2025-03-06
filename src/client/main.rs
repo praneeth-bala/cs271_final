@@ -5,12 +5,12 @@ use cs271_final::utils::datastore::DataStore;
 use cs271_final::utils::event::{Event, LocalEvent, LocalPayload, NetworkEvent, NetworkPayload};
 use cs271_final::utils::network::Network;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{self, Receiver, Sender};
 use log::{info, trace};
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use std::{io, process, thread};
-use std::fs;
 
 fn main() {
     env_logger::init();
@@ -105,7 +105,12 @@ fn main() {
                         let transaction_id = transaction_id_counter;
                         sender
                             .send(Event::Local(LocalEvent {
-                                payload: LocalPayload::Transfer { from, to, amount, transaction_id },
+                                payload: LocalPayload::Transfer {
+                                    from,
+                                    to,
+                                    amount,
+                                    transaction_id,
+                                },
                             }))
                             .expect("Failed to send transfer event");
 
@@ -135,7 +140,10 @@ fn main() {
             "5" => {
                 let file_path = "transactions.txt";
                 match load_transactions_from_file(file_path, &sender, &mut transaction_id_counter) {
-                    Ok(count) => println!("Successfully loaded and triggered {} transactions from transactions.txt.", count),
+                    Ok(count) => println!(
+                        "Successfully loaded and triggered {} transactions from transactions.txt.",
+                        count
+                    ),
                     Err(e) => println!("Failed to load transactions from transactions.txt: {}", e),
                 }
             }
@@ -253,233 +261,284 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
     let mut pending_raft: HashMap<u64, Instant> = HashMap::new();
     let mut completed_transactions: Vec<(u64, Duration)> = Vec::new();
     // let timeout_duration = Duration::from_secs(5);
+    let mut balance_responses: HashMap<u64, HashMap<u64, Option<i64>>> = HashMap::new();
 
     loop {
         match receiver.recv() {
-            Ok(event) => {
-                match event {
-                    Event::Local(message) => {
-                        trace!("Handling local event: {:?}", message.payload);
-                        match message.payload {
-                            LocalPayload::PrintBalance { id } => {
-                                let instances = DataStore::get_all_instances_from_id(id);
-                                for instance in instances {
-                                    network.send_message(NetworkEvent {
-                                        from: CLIENT_INSTANCE_ID,
-                                        to: instance,
-                                        payload: NetworkPayload::PrintBalance { id }.serialize(),
-                                    });
-                                }
-                            }
-                            LocalPayload::PrintDatastore { instance } => {
+            Ok(event) => match event {
+                Event::Local(message) => {
+                    trace!("Handling local event: {:?}", message.payload);
+                    match message.payload {
+                        LocalPayload::PrintBalance { id } => {
+                            let instances = DataStore::get_all_instances_from_id(id);
+                            for instance in instances {
                                 network.send_message(NetworkEvent {
                                     from: CLIENT_INSTANCE_ID,
                                     to: instance,
-                                    payload: NetworkPayload::PrintDatastore.serialize(),
+                                    payload: NetworkPayload::PrintBalance { id }.serialize(),
                                 });
                             }
-                            LocalPayload::Transfer { from, to, amount , transaction_id} => {
-                                if from / 1000 == to / 1000 {
-                                    pending_raft.insert(
-                                        transaction_id,
-                                        Instant::now(),
-                                    );
-                                    network.send_message(NetworkEvent {
-                                        from: CLIENT_INSTANCE_ID,
-                                        to: DataStore::get_random_instance_from_id(from),
-                                        payload: NetworkPayload::Transfer { from, to, amount, transaction_id }
-                                            .serialize(),
-                                    });
-                                }
-                            }
-                            LocalPayload::Start2PC {
-                                transaction_id,
-                                from,
-                                to,
-                                amount,
-                            } => {
-                                if transaction_id == 0 && from == 0 && to == 0 && amount == 0 {
-                                    let transaction_count = completed_transactions.len() as f64;
-                                    if transaction_count == 0.0 {
-                                        println!("No transactions completed yet.");
-                                        continue;
-                                    }
-                                    let total_time: Duration =
-                                        completed_transactions.iter().map(|&(_, t)| t).sum();
-                                    let avg_latency = total_time.as_secs_f64() / transaction_count;
-                                    let throughput = transaction_count / total_time.as_secs_f64();
-                                    println!("Performance Metrics:");
-                                    println!(
-                                        "Completed Transactions: {}",
-                                        transaction_count as u64
-                                    );
-                                    println!("Average Latency: {:.3} seconds", avg_latency);
-                                    println!("Throughput: {:.3} transactions/second", throughput);
-                                } else {
-                                    let from_instance =
-                                        DataStore::get_random_instance_from_id(from);
-                                    let to_instance = DataStore::get_random_instance_from_id(to);
-                                    let all_instances = vec![from_instance, to_instance];
-                                    pending_2pc.insert(
-                                        transaction_id,
-                                        (all_instances, HashSet::new(), Instant::now(), false),
-                                    );
-                                    info!(
-                                        "Initialized 2PC state for transaction {}",
-                                        transaction_id
-                                    );
-                                }
-                            }
-                            LocalPayload::PrepareCluster {
-                                transaction_id,
-                                target,
-                                from,
-                                to,
-                                amount,
-                            } => {
-                                info!(
-                                    "Sending Prepare to server {} for transaction {}",
-                                    target, transaction_id
-                                );
+                            balance_responses.insert(id, HashMap::new());
+                        }
+                        LocalPayload::PrintDatastore { instance } => {
+                            network.send_message(NetworkEvent {
+                                from: CLIENT_INSTANCE_ID,
+                                to: instance,
+                                payload: NetworkPayload::PrintDatastore.serialize(),
+                            });
+                        }
+                        LocalPayload::Transfer {
+                            from,
+                            to,
+                            amount,
+                            transaction_id,
+                        } => {
+                            if from / 1000 == to / 1000 {
+                                pending_raft.insert(transaction_id, Instant::now());
                                 network.send_message(NetworkEvent {
                                     from: CLIENT_INSTANCE_ID,
-                                    to: target,
-                                    payload: NetworkPayload::Prepare {
-                                        transaction_id,
+                                    to: DataStore::get_random_instance_from_id(from),
+                                    payload: NetworkPayload::Transfer {
                                         from,
                                         to,
                                         amount,
+                                        transaction_id,
                                     }
                                     .serialize(),
                                 });
                             }
-                            LocalPayload::CheckAbort {} => {
-                                for (transaction_id, (instances, _, instant, committed)) in pending_2pc.iter() {
-                                    if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT) && !committed {
-                                        for instance in instances {
-                                            network.send_message(NetworkEvent {
-                                                from: CLIENT_INSTANCE_ID,
-                                                to: *instance,
-                                                payload: NetworkPayload::Abort {
-                                                    transaction_id: *transaction_id,
-                                                }
-                                                .serialize(),
-                                            });
-                                        }
+                        }
+                        LocalPayload::Start2PC {
+                            transaction_id,
+                            from,
+                            to,
+                            amount,
+                        } => {
+                            if transaction_id == 0 && from == 0 && to == 0 && amount == 0 {
+                                let transaction_count = completed_transactions.len() as f64;
+                                if transaction_count == 0.0 {
+                                    println!("No transactions completed yet.");
+                                    continue;
+                                }
+                                let total_time: Duration =
+                                    completed_transactions.iter().map(|&(_, t)| t).sum();
+                                let avg_latency = total_time.as_secs_f64() / transaction_count;
+                                let throughput = transaction_count / total_time.as_secs_f64();
+                                println!("Performance Metrics:");
+                                println!("Completed Transactions: {}", transaction_count as u64);
+                                println!("Average Latency: {:.3} seconds", avg_latency);
+                                println!("Throughput: {:.3} transactions/second", throughput);
+                            } else {
+                                let from_instance = DataStore::get_random_instance_from_id(from);
+                                let to_instance = DataStore::get_random_instance_from_id(to);
+                                let all_instances = vec![from_instance, to_instance];
+                                pending_2pc.insert(
+                                    transaction_id,
+                                    (all_instances, HashSet::new(), Instant::now(), false),
+                                );
+                                info!("Initialized 2PC state for transaction {}", transaction_id);
+                            }
+                        }
+                        LocalPayload::PrepareCluster {
+                            transaction_id,
+                            target,
+                            from,
+                            to,
+                            amount,
+                        } => {
+                            info!(
+                                "Sending Prepare to server {} for transaction {}",
+                                target, transaction_id
+                            );
+                            network.send_message(NetworkEvent {
+                                from: CLIENT_INSTANCE_ID,
+                                to: target,
+                                payload: NetworkPayload::Prepare {
+                                    transaction_id,
+                                    from,
+                                    to,
+                                    amount,
+                                }
+                                .serialize(),
+                            });
+                        }
+                        LocalPayload::CheckAbort {} => {
+                            for (transaction_id, (instances, _, instant, committed)) in
+                                pending_2pc.iter()
+                            {
+                                if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT)
+                                    && !committed
+                                {
+                                    for instance in instances {
+                                        network.send_message(NetworkEvent {
+                                            from: CLIENT_INSTANCE_ID,
+                                            to: *instance,
+                                            payload: NetworkPayload::Abort {
+                                                transaction_id: *transaction_id,
+                                            }
+                                            .serialize(),
+                                        });
                                     }
                                 }
                             }
-                            _ => {}
                         }
+                        _ => {}
                     }
-                    Event::Network(message) => {
-                        trace!(
-                            "Handling network event from {} to {}",
-                            message.from, message.to
-                        );
-                        match NetworkPayload::deserialize(message.payload) {
-                            Ok(payload) => {
-                                trace!("Deserialized payload: {:?}", payload);
-                                match payload {
-                                    NetworkPayload::PrepareResponse {
-                                        transaction_id,
-                                        success,
-                                    } => {
-                                        info!("Received PrepareResponse for transaction {}: success={}", transaction_id, success);
-                                        if let Some((instances, acks, _, committed)) =
-                                            pending_2pc.get_mut(&transaction_id)
-                                        {
-                                            if *committed {
+                }
+                Event::Network(message) => {
+                    trace!(
+                        "Handling network event from {} to {}",
+                        message.from,
+                        message.to
+                    );
+                    match NetworkPayload::deserialize(message.payload) {
+                        Ok(payload) => {
+                            trace!("Deserialized payload: {:?}", payload);
+                            match payload {
+                                NetworkPayload::PrepareResponse {
+                                    transaction_id,
+                                    success,
+                                } => {
+                                    info!(
+                                        "Received PrepareResponse for transaction {}: success={}",
+                                        transaction_id, success
+                                    );
+                                    if let Some((instances, acks, _, committed)) =
+                                        pending_2pc.get_mut(&transaction_id)
+                                    {
+                                        if *committed {
+                                            continue;
+                                        }
+                                        if success {
+                                            if acks.contains(&message.from) {
                                                 continue;
                                             }
-                                            if success {
-                                                if acks.contains(&message.from) {
-                                                    continue;
-                                                }
-                                                acks.insert(message.from);
-                                                info!(
-                                                    "Transaction {} prepare acks: {}/2",
-                                                    transaction_id,
-                                                    acks.len()
-                                                );
-                                                if acks.len() == 2 {
-                                                    info!("All clusters prepared for transaction {}, committing", transaction_id);
-                                                    for instance in instances {
-                                                        network.send_message(NetworkEvent {
-                                                            from: CLIENT_INSTANCE_ID,
-                                                            to: *instance,
-                                                            payload: NetworkPayload::Commit {
-                                                                transaction_id,
-                                                            }
-                                                            .serialize(),
-                                                        });
-                                                    }
-                                                    *committed = true;
-                                                    acks.clear();
-                                                }
-                                            } else {
-                                                info!("Cluster failed to prepare for transaction {}, aborting", transaction_id);
-                                                *committed = true;
-                                                acks.clear();
+                                            acks.insert(message.from);
+                                            info!(
+                                                "Transaction {} prepare acks: {}/2",
+                                                transaction_id,
+                                                acks.len()
+                                            );
+                                            if acks.len() == 2 {
+                                                info!("All clusters prepared for transaction {}, committing", transaction_id);
                                                 for instance in instances {
                                                     network.send_message(NetworkEvent {
                                                         from: CLIENT_INSTANCE_ID,
                                                         to: *instance,
-                                                        payload: NetworkPayload::Abort {
+                                                        payload: NetworkPayload::Commit {
                                                             transaction_id,
                                                         }
                                                         .serialize(),
                                                     });
                                                 }
+                                                *committed = true;
+                                                acks.clear();
                                             }
                                         } else {
-                                            info!(
-                                                "No pending 2PC state for transaction {}",
-                                                transaction_id
-                                            );
-                                        }
-                                    }
-                                    NetworkPayload::Ack {
-                                        transaction_id,
-                                        success,
-                                    } => {
-                                        info!(
-                                            "Received Ack for transaction {}: success={}",
-                                            transaction_id, success
-                                        );
-                                        if let Some((instances, acks, start_time, _)) =
-                                            pending_2pc.get_mut(&transaction_id)
-                                        {
-                                            acks.insert(message.from);
-                                            info!(
-                                                "Transaction {} acks: {}/{}",
-                                                transaction_id,
-                                                acks.len(),
-                                                instances.len()
-                                            );
-                                            if acks.len() == instances.len() {
-                                                let latency = start_time.elapsed();
-                                                println!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
-                                                completed_transactions
-                                                    .push((transaction_id, latency));
-                                                pending_2pc.remove(&transaction_id);
+                                            info!("Cluster failed to prepare for transaction {}, aborting", transaction_id);
+                                            *committed = true;
+                                            acks.clear();
+                                            for instance in instances {
+                                                network.send_message(NetworkEvent {
+                                                    from: CLIENT_INSTANCE_ID,
+                                                    to: *instance,
+                                                    payload: NetworkPayload::Abort {
+                                                        transaction_id,
+                                                    }
+                                                    .serialize(),
+                                                });
                                             }
-                                        } else if let Some(start_time) = pending_raft.get_mut(&transaction_id) {
+                                        }
+                                    } else {
+                                        info!(
+                                            "No pending 2PC state for transaction {}",
+                                            transaction_id
+                                        );
+                                    }
+                                }
+                                NetworkPayload::Ack {
+                                    transaction_id,
+                                    success,
+                                } => {
+                                    info!(
+                                        "Received Ack for transaction {}: success={}",
+                                        transaction_id, success
+                                    );
+                                    if let Some((instances, acks, start_time, _)) =
+                                        pending_2pc.get_mut(&transaction_id)
+                                    {
+                                        acks.insert(message.from);
+                                        info!(
+                                            "Transaction {} acks: {}/{}",
+                                            transaction_id,
+                                            acks.len(),
+                                            instances.len()
+                                        );
+                                        if acks.len() == instances.len() {
                                             let latency = start_time.elapsed();
-                                            println!("Transaction {} fully completed in {:?}", transaction_id, latency);
-                                            completed_transactions
-                                                .push((transaction_id, latency));
-                                            pending_raft.remove(&transaction_id);
+                                            println!("Transaction {} fully completed with success: {} in {:?}", transaction_id, success, latency);
+                                            completed_transactions.push((transaction_id, latency));
+                                            pending_2pc.remove(&transaction_id);
+                                        }
+                                    } else if let Some(start_time) =
+                                        pending_raft.get_mut(&transaction_id)
+                                    {
+                                        let latency = start_time.elapsed();
+                                        println!(
+                                            "Transaction {} fully completed in {:?}",
+                                            transaction_id, latency
+                                        );
+                                        completed_transactions.push((transaction_id, latency));
+                                        pending_raft.remove(&transaction_id);
+                                    }
+                                }
+                                NetworkPayload::BalanceResponse { id, balance } => {
+                                    if let Some(responses) = balance_responses.get_mut(&id) {
+                                        responses.insert(message.from, balance);
+                                        let cluster_instances =
+                                            DataStore::get_all_instances_from_id(id);
+                                        if responses.len() == cluster_instances.len() {
+                                            let balance_value = responses.values().next().unwrap();
+                                            match balance_value {
+                                                Some(bal) => {
+                                                    println!("Balance for ID {}: {}", id, bal)
+                                                }
+                                                None => {
+                                                    println!("No balance found for ID {}", id)
+                                                }
+                                            }
+                                            balance_responses.remove(&id);
                                         }
                                     }
-                                    other => trace!("Unexpected payload: {:?}", other),
                                 }
+                                NetworkPayload::DatastoreResponse {
+                                    instance,
+                                    transactions,
+                                } => {
+                                    println!("Datastore for Server {}:", instance);
+                                    if transactions.is_empty() {
+                                        println!("  No committed transactions.");
+                                    } else {
+                                        for (idx, txn) in transactions.iter().enumerate() {
+                                            println!(
+                                                    "  {}. Transfer: {} -> {}, Amount: {}, 2PC ID: {}, Prepare: {}",
+                                                    idx + 1,
+                                                    txn.from,
+                                                    txn.to,
+                                                    txn.value,
+                                                    txn.twopc_transaction_id,
+                                                    txn.twopc_prepare
+                                                );
+                                        }
+                                    }
+                                }
+                                other => trace!("Unexpected payload: {:?}", other),
                             }
-                            Err(e) => trace!("Failed to deserialize payload: {}", e),
                         }
+                        Err(e) => trace!("Failed to deserialize payload: {}", e),
                     }
                 }
-            }
+            },
             Err(_) => {
                 trace!("mpsc channel closed");
                 break;

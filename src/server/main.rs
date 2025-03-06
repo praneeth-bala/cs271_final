@@ -1,12 +1,14 @@
-use cs271_final::utils::constants::{HEARTBEAT_TIMEOUT, PACKET_PROCESS_DELAY, PROXY_PORT};
-use cs271_final::utils::event::{Event, LocalEvent, LocalPayload, NetworkPayload};
+use cs271_final::utils::constants::{
+    CLIENT_INSTANCE_ID, HEARTBEAT_TIMEOUT, PACKET_PROCESS_DELAY, PROXY_PORT,
+};
+use cs271_final::utils::event::{Event, LocalEvent, LocalPayload, NetworkEvent, NetworkPayload};
 use cs271_final::utils::network::Network;
 
+use log::{debug, info, trace};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{env, io, process, thread, time::Duration};
-use log::{info, debug, trace};
 
 mod server;
 use server::{RaftServer, ServerRole};
@@ -39,18 +41,18 @@ fn main() {
     let raft_server = RaftServer::new(instance_id);
 
     let last_ping = Arc::new(Mutex::new(std::time::Instant::now()));
-    
+
     // Spawn a separate thread for timeout handling
     let last_ping_clone = Arc::clone(&last_ping);
     let role_clone = Arc::clone(&raft_server.role);
     let sender_clone = sender.clone();
     thread::spawn(move || {
         let election_timeout = Duration::from_millis(
-            HEARTBEAT_TIMEOUT + 2*PACKET_PROCESS_DELAY + ((instance_id-1)%3)*2000,
+            HEARTBEAT_TIMEOUT + 2 * PACKET_PROCESS_DELAY + ((instance_id - 1) % 3) * 2000,
         );
         let mut last_heartbeat = Instant::now();
         loop {
-            thread::sleep(Duration::from_millis(HEARTBEAT_TIMEOUT/10));
+            thread::sleep(Duration::from_millis(HEARTBEAT_TIMEOUT / 10));
             let mut locked_ping = last_ping_clone.lock().unwrap();
 
             if *role_clone.lock().unwrap() != ServerRole::Leader
@@ -131,6 +133,17 @@ fn handle_events(
                                     raft_server.instance_id, id
                                 );
                                 raft_server.datastore.print_value(id);
+                                let balance = raft_server.datastore.kv_store.get(&id).copied();
+                                network.send_message(NetworkEvent {
+                                    from: raft_server.instance_id,
+                                    to: CLIENT_INSTANCE_ID,
+                                    payload: NetworkPayload::BalanceResponse { id, balance }
+                                        .serialize(),
+                                });
+                                info!(
+                                    "Server {} sent balance {:?} for ID {} to client",
+                                    raft_server.instance_id, balance, id
+                                );
                             }
                             NetworkPayload::PrintDatastore => {
                                 info!(
@@ -138,12 +151,33 @@ fn handle_events(
                                     raft_server.instance_id
                                 );
                                 raft_server.datastore.print_datastore();
-                            }
-                            NetworkPayload::Transfer { from, to, amount, transaction_id } => {
+                                let transactions =
+                                    raft_server.datastore.committed_transactions.clone();
+                                let transaction_count = transactions.len();
+                                network.send_message(NetworkEvent {
+                                    from: raft_server.instance_id,
+                                    to: CLIENT_INSTANCE_ID,
+                                    payload: NetworkPayload::DatastoreResponse {
+                                        instance: raft_server.instance_id,
+                                        transactions,
+                                    }
+                                    .serialize(),
+                                });
                                 info!(
-                                    "Server {} received Transfer request: {} -> {} ({} units), ID: {}",
-                                    raft_server.instance_id, from, to, amount, transaction_id
+                                    "Server {} sent datastore with {} transactions to client",
+                                    raft_server.instance_id, transaction_count
                                 );
+                            }
+                            NetworkPayload::Transfer {
+                                from,
+                                to,
+                                amount,
+                                transaction_id,
+                            } => {
+                                info!(
+                                                                                    "Server {} received Transfer request: {} -> {} ({} units), ID: {}",
+                                                                                    raft_server.instance_id, from, to, amount, transaction_id
+                                                                                );
                                 raft_server.handle_transfer(payload, message.from, &mut network);
                             }
                             NetworkPayload::RequestVote { .. } => {
@@ -214,6 +248,25 @@ fn handle_events(
                                     raft_server.instance_id, transaction_id, success
                                 );
                                 // Followers don’t need to act on Ack; it’s for the client
+                            }
+                            NetworkPayload::BalanceResponse { id, balance } => {
+                                trace!(
+                                    "Server {} ignoring BalanceResponse for ID {} from {} ",
+                                    raft_server.instance_id,
+                                    id,
+                                    message.from,
+                                );
+                            }
+                            NetworkPayload::DatastoreResponse {
+                                instance,
+                                transactions,
+                            } => {
+                                trace!(
+                                    "Server {} ignoring DatastoreResponse for instance {} from {}",
+                                    raft_server.instance_id,
+                                    instance,
+                                    message.from
+                                );
                             }
                         }
                     }
