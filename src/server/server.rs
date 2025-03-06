@@ -436,7 +436,18 @@ impl RaftServer {
                         return;
                     }
 
-                    if !self.datastore.acquire_locks(vec![from, to]) {
+                    let mut sufficient_funds = true;
+                    if let Some(balance) = self.datastore.kv_store.get(&from) {
+                        sufficient_funds = *balance >= amount;
+                        info!(
+                            "Server {} checked balance for {}: {} (needed {})",
+                            self.instance_id, from, balance, amount
+                        );
+                    } else {
+                        sufficient_funds = false;
+                    }
+
+                    if !sufficient_funds || !self.datastore.acquire_locks(vec![from, to]) {
                         network.send_message(NetworkEvent {
                             from: self.instance_id,
                             to: CLIENT_INSTANCE_ID,
