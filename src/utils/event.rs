@@ -75,6 +75,9 @@ pub enum NetworkPayload {
         instance: u64,
         transactions: Vec<Transaction>,
     },
+    ServerNotFound {
+        instance: u64,
+    },
 }
 
 impl NetworkPayload {
