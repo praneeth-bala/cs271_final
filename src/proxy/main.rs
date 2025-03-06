@@ -2,12 +2,12 @@ use cs271_final::utils::constants::{PROXY_INSTANCE_ID, PROXY_PORT};
 use cs271_final::utils::event::Event;
 use cs271_final::utils::network::Network;
 
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::{thread, time::Duration};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 use std::fs;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::{thread, time::Duration};
 
 fn main() {
     env_logger::init();
@@ -17,11 +17,7 @@ fn main() {
     let config_map_clone = config_map.clone();
     network.listen_for_instances(PROXY_PORT);
     thread::spawn(move || {
-        handle_events(
-            network,
-            receiver,
-            config_map_clone
-        );
+        handle_events(network, receiver, config_map_clone);
     });
     println!("Proxy started!");
 
@@ -58,7 +54,11 @@ fn has_intersection(vec1: &Vec<usize>, vec2: &Vec<usize>) -> bool {
     vec2.iter().any(|x| set1.contains(x))
 }
 
-fn handle_events(mut network: Network, receiver: Receiver<Event>, config_map: Arc<Mutex<HashMap<u64, Vec<usize>>>>){
+fn handle_events(
+    mut network: Network,
+    receiver: Receiver<Event>,
+    config_map: Arc<Mutex<HashMap<u64, Vec<usize>>>>,
+) {
     loop {
         match receiver.recv() {
             Ok(event) => {
@@ -68,13 +68,22 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>, config_map: Ar
                         // Handle local events if any
                     }
                     Event::Network(message) => {
-                        println!("Handling network event from {} to {}", message.from, message.to);
+                        println!(
+                            "Handling network event from {} to {}",
+                            message.from, message.to
+                        );
                         let config = config_map.lock().unwrap();
-                        if has_intersection(config.get(&message.from).unwrap(), config.get(&message.to).unwrap()) {
+                        if has_intersection(
+                            config.get(&message.from).unwrap(),
+                            config.get(&message.to).unwrap(),
+                        ) {
                             println!("Relaying message from {} to {}", message.from, message.to);
                             network.send_message(message);
                         } else {
-                            println!("Dropping message from {} to {} due to partitioning", message.from, message.to);
+                            println!(
+                                "Dropping message from {} to {} due to partitioning",
+                                message.from, message.to
+                            );
                         }
                     }
                 }

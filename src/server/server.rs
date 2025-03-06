@@ -6,7 +6,7 @@ use cs271_final::utils::network::Network;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use log::{info, debug};
+use log::{debug, info};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ServerRole {
@@ -27,7 +27,6 @@ pub struct RaftServer {
     pub votes_received: u64,
     pub current_term: u64,
     pub voted_for: Option<u64>,
-
 }
 
 impl RaftServer {
@@ -53,7 +52,7 @@ impl RaftServer {
             next_index_map,
             commit_index_map,
             instance_id,
-            leader_id: None,
+            leader_id: Some(0),
             current_term: 0,
             voted_for: None,
         }
@@ -371,7 +370,7 @@ impl RaftServer {
                                         to: CLIENT_INSTANCE_ID,
                                         payload: NetworkPayload::Ack {
                                             transaction_id: key,
-                                            success: if tran.value == 0 {false} else {true},
+                                            success: if tran.value == 0 { false } else { true },
                                         }
                                         .serialize(),
                                     });
@@ -399,7 +398,7 @@ impl RaftServer {
                             "Server {} detected log inconsistency with follower {}: success=false",
                             self.instance_id, from
                         );
-                        if self.next_index_map[&from] != 0{
+                        if self.next_index_map[&from] != 0 {
                             self.next_index_map
                                 .insert(from, self.next_index_map[&from] - 1);
                         }
@@ -420,9 +419,16 @@ impl RaftServer {
         network: &mut Network,
     ) {
         match request {
-            NetworkPayload::Transfer { from, to, amount, transaction_id } => {
+            NetworkPayload::Transfer {
+                from,
+                to,
+                amount,
+                transaction_id,
+            } => {
                 // For intra-shard, initiate Raft consensus
-                if self.datastore.kv_store.contains_key(&from) && self.datastore.kv_store.contains_key(&to) {
+                if self.datastore.kv_store.contains_key(&from)
+                    && self.datastore.kv_store.contains_key(&to)
+                {
                     if *self.role.lock().unwrap() != ServerRole::Leader {
                         info!(
                             "Server {} not leader, redirecting to {}",
@@ -437,7 +443,7 @@ impl RaftServer {
                         return;
                     }
 
-                    let sufficient_funds ;
+                    let sufficient_funds;
                     if let Some(balance) = self.datastore.kv_store.get(&from) {
                         sufficient_funds = *balance >= amount;
                         info!(
@@ -448,7 +454,10 @@ impl RaftServer {
                         sufficient_funds = false;
                     }
 
-                    if amount==0 || !sufficient_funds || !self.datastore.acquire_locks(vec![from, to]) {
+                    if amount == 0
+                        || !sufficient_funds
+                        || !self.datastore.acquire_locks(vec![from, to])
+                    {
                         network.send_message(NetworkEvent {
                             from: self.instance_id,
                             to: CLIENT_INSTANCE_ID,
@@ -459,7 +468,7 @@ impl RaftServer {
                             .serialize(),
                         });
                         return;
-                    } 
+                    }
 
                     // Same cluster (shard)
                     let transaction = Transaction {
@@ -483,10 +492,8 @@ impl RaftServer {
                         .insert(self.instance_id, self.datastore.log.len());
                     self.commit_index_map
                         .insert(self.instance_id, self.datastore.log.len());
-                    self.datastore.add_pending_transaction(
-                        transaction_id,
-                        self.datastore.log.len()-1
-                    );
+                    self.datastore
+                        .add_pending_transaction(transaction_id, self.datastore.log.len() - 1);
                     self.replicate_log(network, None);
                 }
             }
@@ -625,10 +632,9 @@ impl RaftServer {
                     locked_items.push(to);
                 }
 
-                if amount==0 || !sufficient_funds
-                    || !self
-                        .datastore
-                        .acquire_locks(locked_items.clone())
+                if amount == 0
+                    || !sufficient_funds
+                    || !self.datastore.acquire_locks(locked_items.clone())
                 {
                     info!("Server {} aborting Prepare for transaction {}: insufficient funds or locks unavailable", self.instance_id, transaction_id);
                     network.send_message(NetworkEvent {
@@ -660,10 +666,8 @@ impl RaftServer {
                     self.instance_id, transaction_id, log_entry.index
                 );
                 self.datastore.append_log(log_entry);
-                self.datastore.add_pending_transaction(
-                    transaction_id,
-                    self.datastore.log.len()-1
-                );
+                self.datastore
+                    .add_pending_transaction(transaction_id, self.datastore.log.len() - 1);
                 self.next_index_map
                     .insert(self.instance_id, self.datastore.log.len());
                 self.commit_index_map
@@ -700,7 +704,9 @@ impl RaftServer {
                     });
                     return;
                 }
-                if let Some(&pending_index) = self.datastore.pending_transactions.get(&transaction_id) {
+                if let Some(&pending_index) =
+                    self.datastore.pending_transactions.get(&transaction_id)
+                {
                     let mut transaction = self.datastore.log_entry(pending_index).unwrap().command;
                     transaction.twopc_prepare = false;
                     let log_entry = LogEntry {
@@ -718,7 +724,11 @@ impl RaftServer {
                         .insert(self.instance_id, self.datastore.log.len());
                     self.commit_index_map
                         .insert(self.instance_id, self.datastore.log.len());
-                    *self.datastore.pending_transactions.get_mut(&transaction_id).unwrap()=self.datastore.log.len()-1;
+                    *self
+                        .datastore
+                        .pending_transactions
+                        .get_mut(&transaction_id)
+                        .unwrap() = self.datastore.log.len() - 1;
                     self.replicate_log(network, None);
                 }
             }
@@ -748,8 +758,17 @@ impl RaftServer {
                     return;
                 }
 
-                if let Some(&pending_index) = self.datastore.pending_transactions.get(&transaction_id) {
-                    if self.datastore.log_entry(pending_index).unwrap().command.twopc_prepare == false {
+                if let Some(&pending_index) =
+                    self.datastore.pending_transactions.get(&transaction_id)
+                {
+                    if self
+                        .datastore
+                        .log_entry(pending_index)
+                        .unwrap()
+                        .command
+                        .twopc_prepare
+                        == false
+                    {
                         return;
                     }
                     let mut transaction = self.datastore.log_entry(pending_index).unwrap().command;
@@ -770,7 +789,11 @@ impl RaftServer {
                         .insert(self.instance_id, self.datastore.log.len());
                     self.commit_index_map
                         .insert(self.instance_id, self.datastore.log.len());
-                    *self.datastore.pending_transactions.get_mut(&transaction_id).unwrap()=self.datastore.log.len()-1;
+                    *self
+                        .datastore
+                        .pending_transactions
+                        .get_mut(&transaction_id)
+                        .unwrap() = self.datastore.log.len() - 1;
                     self.replicate_log(network, None);
                 } else {
                     network.send_message(NetworkEvent {

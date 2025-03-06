@@ -1,7 +1,7 @@
 use bincode;
 use serde::{Deserialize, Serialize};
 
-use super::datastore::LogEntry;
+use super::datastore::{LogEntry, Transaction};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NetworkEvent {
@@ -67,6 +67,14 @@ pub enum NetworkPayload {
         transaction_id: u64,
         success: bool,
     },
+    BalanceResponse {
+        id: u64,
+        balance: Option<i64>,
+    },
+    DatastoreResponse {
+        instance: u64,
+        transactions: Vec<Transaction>,
+    },
 }
 
 impl NetworkPayload {
@@ -123,7 +131,13 @@ pub enum LocalPayload {
         amount: i64,
     },
 
-    PrepareCluster { transaction_id: u64, target: u64, from: u64, to: u64, amount: i64 },
+    PrepareCluster {
+        transaction_id: u64,
+        target: u64,
+        from: u64,
+        to: u64,
+        amount: i64,
+    },
 }
 
 pub enum Event {

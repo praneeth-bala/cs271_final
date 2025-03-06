@@ -1,10 +1,10 @@
+use log::trace;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc::Sender, Arc, Mutex};
-use std::time::Duration;
-use log::trace;
 use std::thread;
+use std::time::Duration;
 
 use crate::utils::constants::PACKET_PROCESS_DELAY;
 
@@ -14,7 +14,7 @@ pub struct Network {
     instance_connection_map: Arc<Mutex<HashMap<u64, TcpStream>>>,
     sender: Sender<Event>,
     proxy: bool,
-    instance_id: u64
+    instance_id: u64,
 }
 
 impl Network {
@@ -23,7 +23,7 @@ impl Network {
             instance_connection_map: Arc::new(Mutex::new(HashMap::new())),
             sender,
             proxy,
-            instance_id
+            instance_id,
         }
     }
 
@@ -44,14 +44,17 @@ impl Network {
                     trace!("Failed to send hello message: {}", e);
                     return false;
                 }
-                
+
                 let stream_clone = stream.try_clone().expect("Failed to clone TcpStream");
                 let sender_clone = self.sender.clone();
                 let map_clone = Arc::clone(&self.instance_connection_map);
                 thread::spawn(move || {
                     handle_connection(0, stream_clone, sender_clone, map_clone);
                 });
-                self.instance_connection_map.lock().unwrap().insert(0, stream);
+                self.instance_connection_map
+                    .lock()
+                    .unwrap()
+                    .insert(0, stream);
                 true
             }
             Err(e) => {
@@ -65,28 +68,39 @@ impl Network {
         let address = format!("127.0.0.1:{}", port);
         let listener = TcpListener::bind(&address).unwrap();
         trace!("Listening on {}", address);
-    
+
         let sender_clone = self.sender.clone();
         let map_clone = Arc::clone(&self.instance_connection_map);
-    
+
         // Spawn a new thread to handle incoming connections
         thread::spawn(move || {
             for stream in listener.incoming() {
                 match stream {
                     Ok(stream) => {
-                        let mut stream_clone = stream.try_clone().expect("Failed to clone TcpStream");
+                        let mut stream_clone =
+                            stream.try_clone().expect("Failed to clone TcpStream");
                         let sender_clone = sender_clone.clone();
                         let map_clone = Arc::clone(&map_clone);
-    
+
                         thread::spawn(move || {
                             let mut buffer = [0; 512];
                             if let Ok(bytes_read) = stream_clone.read(&mut buffer) {
                                 if bytes_read > 0 {
-                                    if let Ok(message) = serde_json::from_slice::<NetworkEvent>(&buffer[..bytes_read]) {
+                                    if let Ok(message) = serde_json::from_slice::<NetworkEvent>(
+                                        &buffer[..bytes_read],
+                                    ) {
                                         let instance_id = message.from;
-                                        map_clone.lock().unwrap().insert(instance_id, stream_clone.try_clone().unwrap());
+                                        map_clone
+                                            .lock()
+                                            .unwrap()
+                                            .insert(instance_id, stream_clone.try_clone().unwrap());
                                         trace!("Instance {} connected", instance_id);
-                                        handle_connection(instance_id, stream_clone, sender_clone, map_clone);
+                                        handle_connection(
+                                            instance_id,
+                                            stream_clone,
+                                            sender_clone,
+                                            map_clone,
+                                        );
                                     }
                                 }
                             }
@@ -106,16 +120,25 @@ impl Network {
             return;
         }
         let instance_id = if self.proxy { message.to } else { 0 };
-        if let Some(stream) = self.instance_connection_map.lock().unwrap().get_mut(&instance_id) {
+        if let Some(stream) = self
+            .instance_connection_map
+            .lock()
+            .unwrap()
+            .get_mut(&instance_id)
+        {
             let serialized_message = serde_json::to_vec(&message).unwrap();
 
             // Add length prefix (4 bytes, big-endian)
-            let mut serialized_message_with_len = (serialized_message.len() as u32).to_be_bytes().to_vec();
+            let mut serialized_message_with_len =
+                (serialized_message.len() as u32).to_be_bytes().to_vec();
             serialized_message_with_len.extend_from_slice(&serialized_message);
 
             if let Err(e) = stream.write_all(&serialized_message_with_len.as_slice()) {
                 trace!("Failed to send message to {}: {}", message.to, e);
-                self.instance_connection_map.lock().unwrap().remove(&instance_id);
+                self.instance_connection_map
+                    .lock()
+                    .unwrap()
+                    .remove(&instance_id);
             } else {
                 trace!("Sent message to {}", message.to);
             }
@@ -125,7 +148,12 @@ impl Network {
     }
 }
 
-fn handle_connection(instance_id: u64, mut stream: TcpStream, sender: Sender<Event>, map: Arc<Mutex<HashMap<u64, TcpStream>>>) {
+fn handle_connection(
+    instance_id: u64,
+    mut stream: TcpStream,
+    sender: Sender<Event>,
+    map: Arc<Mutex<HashMap<u64, TcpStream>>>,
+) {
     let mut buffer = Vec::new();
     let mut temp = [0; 1024]; // Temporary buffer for reads
     loop {
@@ -155,7 +183,9 @@ fn handle_connection(instance_id: u64, mut stream: TcpStream, sender: Sender<Eve
                         Ok(message) => {
                             trace!("Received message from {}", message.from);
                             thread::sleep(Duration::from_millis(PACKET_PROCESS_DELAY));
-                            sender.send(Event::Network(message)).expect("Failed to send message to mpsc channel");
+                            sender
+                                .send(Event::Network(message))
+                                .expect("Failed to send message to mpsc channel");
                         }
                         Err(e) => {
                             trace!("Failed to deserialize message: {}", e);
@@ -164,7 +194,11 @@ fn handle_connection(instance_id: u64, mut stream: TcpStream, sender: Sender<Eve
                 }
             }
             Err(e) => {
-                trace!("Failed to read from stream: {} in instance {}", e, instance_id);
+                trace!(
+                    "Failed to read from stream: {} in instance {}",
+                    e,
+                    instance_id
+                );
                 map.lock().unwrap().remove(&instance_id);
                 break;
             }

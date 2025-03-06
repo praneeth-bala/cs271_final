@@ -1,10 +1,10 @@
+use log::{debug, info};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::fs;
-use log::{info, debug};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Transaction {
@@ -100,9 +100,21 @@ impl DataStore {
         }
     }
 
-    pub fn record_transaction(&mut self, from: u64, to: u64, value: i64, twopc_prepare: bool, twopc_transaction_id: u64) {
-        self.replicated_transactions
-            .push(Transaction { from, to, value, twopc_prepare, twopc_transaction_id });
+    pub fn record_transaction(
+        &mut self,
+        from: u64,
+        to: u64,
+        value: i64,
+        twopc_prepare: bool,
+        twopc_transaction_id: u64,
+    ) {
+        self.replicated_transactions.push(Transaction {
+            from,
+            to,
+            value,
+            twopc_prepare,
+            twopc_transaction_id,
+        });
         self.save_to_file();
     }
 
@@ -142,7 +154,14 @@ impl DataStore {
         }
     }
 
-    pub fn process_transfer(&mut self, from: u64, to: u64, amount: i64, twopc_prepare: bool, twopc_transaction_id: u64) -> bool {
+    pub fn process_transfer(
+        &mut self,
+        from: u64,
+        to: u64,
+        amount: i64,
+        twopc_prepare: bool,
+        twopc_transaction_id: u64,
+    ) -> bool {
         // if self.locks.contains_key(&from) || self.locks.contains_key(&to) {
         //     info!("Transaction failed: locked!");
         //     panic!();
@@ -300,11 +319,7 @@ impl DataStore {
     }
 
     // New method to add a pending transaction
-    pub fn add_pending_transaction(
-        &mut self,
-        transaction_id: u64,
-        index: usize,
-    ) {
+    pub fn add_pending_transaction(&mut self, transaction_id: u64, index: usize) {
         self.pending_transactions.insert(transaction_id, index);
         debug!(
             "Server {} added pending transaction {}",
