@@ -436,7 +436,7 @@ impl RaftServer {
                         return;
                     }
 
-                    let mut sufficient_funds = true;
+                    let sufficient_funds ;
                     if let Some(balance) = self.datastore.kv_store.get(&from) {
                         sufficient_funds = *balance >= amount;
                         info!(
@@ -457,7 +457,8 @@ impl RaftServer {
                             }
                             .serialize(),
                         });
-                    }
+                        return;
+                    } 
 
                     // Same cluster (shard)
                     let transaction = Transaction {
