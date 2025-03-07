@@ -283,7 +283,6 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
     let mut pending_raft: HashMap<u64, (u64, Instant, u64, u64, i64)> = HashMap::new();
     let mut completed_transactions: Vec<(u64, Duration)> = Vec::new();
     // let timeout_duration = Duration::from_secs(5);
-    let mut balance_responses: HashMap<u64, HashMap<u64, Option<i64>>> = HashMap::new();
 
     loop {
         match receiver.recv() {
@@ -300,7 +299,6 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     payload: NetworkPayload::PrintBalance { id }.serialize(),
                                 });
                             }
-                            balance_responses.insert(id, HashMap::new());
                         }
                         LocalPayload::PrintDatastore { instance } => {
                             network.send_message(NetworkEvent {
@@ -558,21 +556,12 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     }
                                 }
                                 NetworkPayload::BalanceResponse { id, balance } => {
-                                    if let Some(responses) = balance_responses.get_mut(&id) {
-                                        responses.insert(message.from, balance);
-                                        let cluster_instances =
-                                            DataStore::get_all_instances_from_id(id);
-                                        if responses.len() == cluster_instances.len() {
-                                            let balance_value = responses.values().next().unwrap();
-                                            match balance_value {
-                                                Some(bal) => {
-                                                    println!("Balance for ID {}: {}", id, bal)
-                                                }
-                                                None => {
-                                                    println!("No balance found for ID {}", id)
-                                                }
-                                            }
-                                            balance_responses.remove(&id);
+                                    match balance {
+                                        Some(bal) => {
+                                            println!("Balance for ID {}: {} from server {}", id, bal, message.from)
+                                        }
+                                        None => {
+                                            println!("No balance found for ID {} from server {}", id, message.from)
                                         }
                                     }
                                 }
