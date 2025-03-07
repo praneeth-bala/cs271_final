@@ -1,6 +1,7 @@
 use cs271_final::utils::constants::{
     CLIENT_INSTANCE_ID, HEARTBEAT_TIMEOUT, PACKET_PROCESS_DELAY, PROXY_PORT,
 };
+use cs271_final::utils::datastore::Transaction;
 use cs271_final::utils::event::{Event, LocalEvent, LocalPayload, NetworkEvent, NetworkPayload};
 use cs271_final::utils::network::Network;
 
@@ -151,8 +152,10 @@ fn handle_events(
                                     raft_server.instance_id
                                 );
                                 raft_server.datastore.print_datastore();
-                                let transactions =
-                                    raft_server.datastore.replicated_transactions.clone();
+                                let transactions: Vec<Transaction> =
+                                    raft_server.datastore.replicated_transactions.clone().into_iter()
+                                    .filter(|txn| txn.value != 0 && !txn.twopc_prepare) 
+                                    .collect();
                                 let transaction_count = transactions.len();
                                 network.send_message(NetworkEvent {
                                     from: raft_server.instance_id,
@@ -175,9 +178,9 @@ fn handle_events(
                                 transaction_id,
                             } => {
                                 info!(
-                                                                                                            "Server {} received Transfer request: {} -> {} ({} units), ID: {}",
-                                                                                                            raft_server.instance_id, from, to, amount, transaction_id
-                                                                                                        );
+                                    "Server {} received Transfer request: {} -> {} ({} units), ID: {}",
+                                     raft_server.instance_id, from, to, amount, transaction_id
+                                );
                                 raft_server.handle_transfer(payload, message.from, &mut network);
                             }
                             NetworkPayload::RequestVote { .. } => {
