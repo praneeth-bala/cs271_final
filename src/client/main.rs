@@ -299,8 +299,10 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                         } => {
                             if from / 1000 == to / 1000 {
                                 let server_to_send = DataStore::get_random_instance_from_id(from);
-                                pending_raft
-                                    .insert(transaction_id, (server_to_send, Instant::now(), from, to, amount));
+                                pending_raft.insert(
+                                    transaction_id,
+                                    (server_to_send, Instant::now(), from, to, amount),
+                                );
                                 println!(
                                     "Sending transaction {} to server {}",
                                     transaction_id, server_to_send
@@ -402,7 +404,9 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                             }
                             to_delete.clear();
 
-                            for (&transaction_id, (_, instant, from, to ,amount)) in pending_raft.iter() {
+                            for (&transaction_id, (_, instant, from, to, amount)) in
+                                pending_raft.iter()
+                            {
                                 if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT) {
                                     println!(
                                         "Transaction {} stuck because timed out, retrying",
@@ -411,7 +415,12 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     network.send_message(NetworkEvent {
                                         from: CLIENT_INSTANCE_ID,
                                         to: DataStore::get_random_instance_from_id(*from),
-                                        payload: NetworkPayload::Transfer { from: *from, to: *to, amount: *amount, transaction_id }
+                                        payload: NetworkPayload::Transfer {
+                                            from: *from,
+                                            to: *to,
+                                            amount: *amount,
+                                            transaction_id,
+                                        }
                                         .serialize(),
                                     });
                                 }
@@ -511,7 +520,10 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         );
                                         if acks.len() == instances.len() {
                                             let latency = start_time.elapsed();
-                                            println!("Transaction {} completed with success: {} in {:?}", transaction_id, success, latency);
+                                            println!(
+                                                "Transaction {} completed with success: {} in {:?}",
+                                                transaction_id, success, latency
+                                            );
                                             completed_transactions.push((transaction_id, latency));
                                             pending_2pc.remove(&transaction_id);
                                         }
@@ -556,7 +568,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     } else {
                                         for (idx, txn) in transactions.iter().enumerate() {
                                             println!(
-                                                    "  {}. Transfer: {} -> {}, Amount: {}, 2PC ID: {}, Prepare: {}",
+                                                    "  {}. Transfer: {} -> {}, Amount: {}, Transaction ID: {}, Prepare: {}",
                                                     idx + 1,
                                                     txn.from,
                                                     txn.to,
