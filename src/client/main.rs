@@ -101,6 +101,13 @@ fn main() {
 
                 match (from, to, amount) {
                     (Ok(from), Ok(to), Ok(amount)) => {
+                        if from < 1 || from > 3000 || to < 1 || to > 3000 {
+                            println!(
+                                "Invalid ID: sender ID ({}) or receiver ID ({}) must be between 1 and 3000",
+                                from, to
+                            );
+                            continue;
+                        }
                         transaction_id_counter += 1;
                         let transaction_id = transaction_id_counter;
                         sender
@@ -177,6 +184,13 @@ fn load_transactions_from_file(
 
         match (from, to, amount) {
             (Ok(from), Ok(to), Ok(amount)) => {
+                if from < 1 || from > 3000 || to < 1 || to > 3000 {
+                    println!(
+                        "Invalid ID: sender ID ({}) or receiver ID ({}) must be between 1 and 3000",
+                        from, to
+                    );
+                    continue;
+                }
                 *transaction_id_counter += 1;
                 let transaction_id = *transaction_id_counter;
                 sender
