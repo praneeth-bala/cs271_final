@@ -59,11 +59,15 @@ fn main() {
                 io::stdin().read_line(&mut id_input).unwrap();
 
                 if let Ok(id) = id_input.trim().parse::<u64>() {
-                    sender
-                        .send(Event::Local(LocalEvent {
-                            payload: LocalPayload::PrintBalance { id },
-                        }))
-                        .expect("Failed to send print-balance event");
+                    if id < 1 || id > 3000 {
+                        println!("Invalid ID. Please enter a valid id between 1 and 3000");
+                    } else {
+                        sender
+                            .send(Event::Local(LocalEvent {
+                                payload: LocalPayload::PrintBalance { id },
+                            }))
+                            .expect("Failed to send print-balance event");
+                    }
                 } else {
                     println!("Invalid client ID. Please enter a valid number.");
                 }
