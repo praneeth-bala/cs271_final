@@ -14,7 +14,7 @@ pub struct Transaction {
 
     // Cross shard stuff
     pub twopc_prepare: bool,
-    pub twopc_transaction_id: u64,
+    pub transaction_id: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -113,7 +113,7 @@ impl DataStore {
             to,
             value,
             twopc_prepare,
-            twopc_transaction_id,
+            transaction_id: twopc_transaction_id,
         });
         self.save_to_file();
     }
@@ -286,7 +286,7 @@ impl DataStore {
                     entry.command.to,
                     entry.command.value,
                     entry.command.twopc_prepare,
-                    entry.command.twopc_transaction_id,
+                    entry.command.transaction_id,
                 );
             }
         }
@@ -312,7 +312,7 @@ impl DataStore {
                     entry.command.to,
                     entry.command.value,
                     entry.command.twopc_prepare,
-                    entry.command.twopc_transaction_id,
+                    entry.command.transaction_id,
                 );
             }
         }

@@ -262,7 +262,7 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
 
 fn handle_events(mut network: Network, receiver: Receiver<Event>) {
     let mut pending_2pc: HashMap<u64, (Vec<u64>, HashSet<u64>, Instant, bool)> = HashMap::new();
-    let mut pending_raft: HashMap<u64, (u64, Instant)> = HashMap::new();
+    let mut pending_raft: HashMap<u64, (u64, Instant, u64, u64, i64)> = HashMap::new();
     let mut completed_transactions: Vec<(u64, Duration)> = Vec::new();
     // let timeout_duration = Duration::from_secs(5);
     let mut balance_responses: HashMap<u64, HashMap<u64, Option<i64>>> = HashMap::new();
@@ -300,7 +300,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                             if from / 1000 == to / 1000 {
                                 let server_to_send = DataStore::get_random_instance_from_id(from);
                                 pending_raft
-                                    .insert(transaction_id, (server_to_send, Instant::now()));
+                                    .insert(transaction_id, (server_to_send, Instant::now(), from, to, amount));
                                 println!(
                                     "Sending transaction {} to server {}",
                                     transaction_id, server_to_send
@@ -402,25 +402,19 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                             }
                             to_delete.clear();
 
-                            for (transaction_id, (instance, instant)) in pending_raft.iter() {
+                            for (&transaction_id, (_, instant, from, to ,amount)) in pending_raft.iter() {
                                 if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT) {
                                     println!(
-                                        "Aborting transaction {} because timed out",
+                                        "Transaction {} stuck because timed out, retrying",
                                         transaction_id
                                     );
-                                    to_delete.push(*transaction_id);
                                     network.send_message(NetworkEvent {
                                         from: CLIENT_INSTANCE_ID,
-                                        to: *instance,
-                                        payload: NetworkPayload::Abort {
-                                            transaction_id: *transaction_id,
-                                        }
+                                        to: DataStore::get_random_instance_from_id(*from),
+                                        payload: NetworkPayload::Transfer { from: *from, to: *to, amount: *amount, transaction_id }
                                         .serialize(),
                                     });
                                 }
-                            }
-                            for transaction_id in to_delete {
-                                pending_raft.remove(&transaction_id);
                             }
                         }
                         _ => {}
@@ -521,7 +515,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             completed_transactions.push((transaction_id, latency));
                                             pending_2pc.remove(&transaction_id);
                                         }
-                                    } else if let Some((_, start_time)) =
+                                    } else if let Some((_, start_time, _, _, _)) =
                                         pending_raft.get_mut(&transaction_id)
                                     {
                                         let latency = start_time.elapsed();
@@ -567,7 +561,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                                     txn.from,
                                                     txn.to,
                                                     txn.value,
-                                                    txn.twopc_transaction_id,
+                                                    txn.transaction_id,
                                                     txn.twopc_prepare
                                                 );
                                         }

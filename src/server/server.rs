@@ -259,6 +259,7 @@ impl RaftServer {
 
                 *self.role.lock().unwrap() = ServerRole::Follower; // Reset to follower on receiving valid AppendEntries
                 self.leader_id = Some(leader_id);
+                self.datastore.locks.clear();
 
                 if !self
                     .datastore
@@ -443,6 +444,13 @@ impl RaftServer {
                         return;
                     }
 
+                    for entry in self.datastore.log.iter() {
+                        if entry.command.transaction_id == transaction_id {
+                            info!("Transaction already there in log, ignoring to prevent duplicate");
+                            return;
+                        }
+                    }
+
                     let sufficient_funds;
                     if let Some(balance) = self.datastore.kv_store.get(&from) {
                         sufficient_funds = *balance >= amount;
@@ -475,7 +483,7 @@ impl RaftServer {
                         from,
                         to,
                         value: amount,
-                        twopc_transaction_id: 0,
+                        transaction_id,
                         twopc_prepare: false,
                     };
                     let log_entry = LogEntry {
@@ -653,7 +661,7 @@ impl RaftServer {
                     from,
                     to,
                     value: amount,
-                    twopc_transaction_id: transaction_id,
+                    transaction_id,
                     twopc_prepare: true,
                 };
                 let log_entry = LogEntry {
