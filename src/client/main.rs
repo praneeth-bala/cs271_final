@@ -568,13 +568,12 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                     } else {
                                         for (idx, txn) in transactions.iter().enumerate() {
                                             println!(
-                                                    "  {}. Transfer: {} -> {}, Amount: {}, Transaction ID: {}, Prepare: {}",
+                                                    "  {}. Transfer: {} -> {}, Amount: {}, Transaction ID: {}",
                                                     idx + 1,
                                                     txn.from,
                                                     txn.to,
                                                     txn.value,
                                                     txn.transaction_id,
-                                                    txn.twopc_prepare
                                                 );
                                         }
                                     }
