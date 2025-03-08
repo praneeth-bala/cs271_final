@@ -421,7 +421,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                             to_delete.clear();
 
                             for (&transaction_id, (_, instant, from, to, amount)) in
-                                pending_raft.iter()
+                                pending_raft.iter_mut()
                             {
                                 if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT) {
                                     println!(
@@ -439,6 +439,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         }
                                         .serialize(),
                                     });
+                                    *instant = Instant::now();
                                 }
                             }
                         }
