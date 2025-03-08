@@ -424,15 +424,16 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                 pending_raft.iter_mut()
                             {
                                 if instant.elapsed() >= Duration::from_millis(ABORT_TIMEOUT) {
-                                    if *retry_count < 3 {
+                                    if *retry_count < 5 {
                                         *retry_count += 1;
+                                        let new_to = DataStore::get_random_instance_from_id(*from);
                                         println!(
-                                            "Transaction {} stuck because timed out, retrying",
-                                            transaction_id
+                                            "Transaction {} stuck because timed out, retrying by sending to server {}",
+                                            transaction_id, new_to
                                         );
                                         network.send_message(NetworkEvent {
                                             from: CLIENT_INSTANCE_ID,
-                                            to: DataStore::get_random_instance_from_id(*from),
+                                            to: new_to,
                                             payload: NetworkPayload::Transfer {
                                                 from: *from,
                                                 to: *to,
@@ -442,9 +443,9 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             .serialize(),
                                         });
                                         *instant = Instant::now();
-                                    } else if *retry_count == 3 {
+                                    } else if *retry_count == 5 {
                                         println!(
-                                            "Transaction {} failed after 3 retries, giving up",
+                                            "Transaction {} failed after 5 retries, giving up",
                                             transaction_id
                                         );
                                         to_delete.push(*transaction_id);
