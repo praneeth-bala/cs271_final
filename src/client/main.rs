@@ -280,7 +280,7 @@ fn coordinate_2pc(transaction_id: u64, from: u64, to: u64, amount: i64, sender: 
 
 fn handle_events(mut network: Network, receiver: Receiver<Event>) {
     let mut pending_2pc: HashMap<u64, (Vec<u64>, HashSet<u64>, Instant, bool)> = HashMap::new();
-    let mut pending_raft: HashMap<u64, (u64, Instant, u64, u64, i64)> = HashMap::new();
+    let mut pending_raft: HashMap<u64, (u64, Instant, u64, u64, i64, u8)> = HashMap::new();
     let mut completed_transactions: Vec<(u64, Duration)> = Vec::new();
     // let timeout_duration = Duration::from_secs(5);
 
@@ -317,7 +317,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                 let server_to_send = DataStore::get_random_instance_from_id(from);
                                 pending_raft.insert(
                                     transaction_id,
-                                    (server_to_send, Instant::now(), from, to, amount),
+                                    (server_to_send, Instant::now(), from, to, amount, 0),
                                 );
                                 println!(
                                     "Sending transaction {} to server {}",
@@ -420,27 +420,40 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                             }
                             to_delete.clear();
 
-                            for (&transaction_id, (_, instant, from, to, amount)) in
+                            for (transaction_id, (_, instant, from, to, amount, retry_count)) in
                                 pending_raft.iter_mut()
                             {
-                                if instant.elapsed() > Duration::from_millis(ABORT_TIMEOUT) {
-                                    println!(
-                                        "Transaction {} stuck because timed out, retrying",
-                                        transaction_id
-                                    );
-                                    network.send_message(NetworkEvent {
-                                        from: CLIENT_INSTANCE_ID,
-                                        to: DataStore::get_random_instance_from_id(*from),
-                                        payload: NetworkPayload::Transfer {
-                                            from: *from,
-                                            to: *to,
-                                            amount: *amount,
-                                            transaction_id,
-                                        }
-                                        .serialize(),
-                                    });
-                                    *instant = Instant::now();
+                                if instant.elapsed() >= Duration::from_millis(ABORT_TIMEOUT) {
+                                    if *retry_count < 3 {
+                                        *retry_count += 1;
+                                        println!(
+                                            "Transaction {} stuck because timed out, retrying",
+                                            transaction_id
+                                        );
+                                        network.send_message(NetworkEvent {
+                                            from: CLIENT_INSTANCE_ID,
+                                            to: DataStore::get_random_instance_from_id(*from),
+                                            payload: NetworkPayload::Transfer {
+                                                from: *from,
+                                                to: *to,
+                                                amount: *amount,
+                                                transaction_id: *transaction_id,
+                                            }
+                                            .serialize(),
+                                        });
+                                        *instant = Instant::now();
+                                    } else if *retry_count == 3 {
+                                        println!(
+                                            "Transaction {} failed after 3 retries, giving up",
+                                            transaction_id
+                                        );
+                                        to_delete.push(*transaction_id);
+                                        *retry_count +=1;
+                                    }
                                 }
+                            }
+                            for transaction_id in to_delete.iter() {
+                                pending_raft.remove(&transaction_id);
                             }
                         }
                         _ => {}
@@ -544,7 +557,7 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                             completed_transactions.push((transaction_id, latency));
                                             pending_2pc.remove(&transaction_id);
                                         }
-                                    } else if let Some((_, start_time, _, _, _)) =
+                                    } else if let Some((_, start_time, _, _, _, _)) =
                                         pending_raft.get_mut(&transaction_id)
                                     {
                                         let latency = start_time.elapsed();
@@ -556,16 +569,20 @@ fn handle_events(mut network: Network, receiver: Receiver<Event>) {
                                         pending_raft.remove(&transaction_id);
                                     }
                                 }
-                                NetworkPayload::BalanceResponse { id, balance } => {
-                                    match balance {
-                                        Some(bal) => {
-                                            println!("Balance for ID {}: {} from server {}", id, bal, message.from)
-                                        }
-                                        None => {
-                                            println!("No balance found for ID {} from server {}", id, message.from)
-                                        }
+                                NetworkPayload::BalanceResponse { id, balance } => match balance {
+                                    Some(bal) => {
+                                        println!(
+                                            "Balance for ID {}: {} from server {}",
+                                            id, bal, message.from
+                                        )
                                     }
-                                }
+                                    None => {
+                                        println!(
+                                            "No balance found for ID {} from server {}",
+                                            id, message.from
+                                        )
+                                    }
+                                },
                                 NetworkPayload::DatastoreResponse {
                                     instance,
                                     transactions,
